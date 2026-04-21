@@ -6,6 +6,7 @@
 #include "ui/ResultsTab.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QCheckBox>
 #include <QDateTime>
 #include <QDialog>
@@ -15,6 +16,7 @@
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPainter>
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
@@ -24,6 +26,8 @@
 #include <QSplitter>
 #include <QStandardItemModel>
 #include <QStatusBar>
+#include <QStyle>
+#include <QStyledItemDelegate>
 #include <QTabWidget>
 #include <QTableView>
 #include <QTextEdit>
@@ -31,6 +35,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <algorithm>
 #include <limits>
 
 namespace {
@@ -48,6 +53,48 @@ protected:
             return leftPinned;
         }
         return QSortFilterProxyModel::lessThan(left, right);
+    }
+};
+
+class LatencyBarDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override
+    {
+        const QString status = index.sibling(index.row(), ResolverModel::StatusColumn).data(Qt::DisplayRole).toString();
+        if (status != QLatin1String("Finished")) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+
+        QStyleOptionViewItem itemOption(option);
+        initStyleOption(&itemOption, index);
+        itemOption.text.clear();
+        QStyle* style = itemOption.widget ? itemOption.widget->style() : QApplication::style();
+        style->drawControl(QStyle::CE_ItemViewItem, &itemOption, painter, itemOption.widget);
+
+        const double median = index.data(Qt::UserRole).toDouble();
+        const double loss = index.sibling(index.row(), ResolverModel::LossColumn).data(Qt::UserRole).toDouble();
+        const double scaleMs = 100.0;
+        const QRect bar = option.rect.adjusted(6, 7, -6, -7);
+        const int fillWidth = std::max(2, static_cast<int>(bar.width() * std::min(median, scaleMs) / scaleMs));
+
+        QColor fill(57, 154, 89);
+        if (loss > 1.0 || median > 50.0) {
+            fill = QColor(196, 69, 54);
+        } else if (median > 20.0) {
+            fill = QColor(210, 154, 45);
+        }
+
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, false);
+        painter->fillRect(bar, QColor(235, 238, 241));
+        painter->fillRect(QRect(bar.left(), bar.top(), fillWidth, bar.height()), fill);
+        painter->setPen(option.palette.text().color());
+        painter->drawText(option.rect.adjusted(8, 0, -8, 0), Qt::AlignVCenter | Qt::AlignRight,
+            QStringLiteral("%1 ms").arg(median, 0, 'f', 1));
+        painter->restore();
     }
 };
 
@@ -98,6 +145,7 @@ void MainWindow::buildUi()
     m_table->verticalHeader()->setVisible(false);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setAlternatingRowColors(true);
+    m_table->setItemDelegateForColumn(ResolverModel::MedianColumn, new LatencyBarDelegate(m_table));
 
     m_resultsTab = new ResultsTab(this);
     m_conclusions = new QTextEdit(this);
@@ -321,44 +369,114 @@ void MainWindow::updateProgress(int completed, int total, qint64 elapsedMs)
 void MainWindow::updateConclusions()
 {
     const QList<ResolverEntry> entries = m_model.entries();
-    const ResolverEntry* fastest = nullptr;
-    const ResolverEntry* stable = nullptr;
-    const ResolverEntry* system = nullptr;
+    QList<ResolverEntry> finished;
+    QList<ResolverEntry> sidelined;
+    ResolverEntry stable;
+    ResolverEntry system;
+    bool hasStable = false;
+    bool hasSystem = false;
     QStringList unreliable;
 
     for (const ResolverEntry& entry : entries) {
+        if (entry.status == ResolverStatus::Sidelined) {
+            sidelined.push_back(entry);
+            if (entry.systemResolver && !hasSystem) {
+                system = entry;
+                hasSystem = true;
+            }
+            continue;
+        }
         if (entry.status != ResolverStatus::Finished || !entry.stats.hasSamples()) {
             continue;
         }
-        if (!fastest || entry.stats.medianMs < fastest->stats.medianMs) {
-            fastest = &entry;
+        finished.push_back(entry);
+        if (!hasStable || entry.stats.stddevMs < stable.stats.stddevMs) {
+            stable = entry;
+            hasStable = true;
         }
-        if (!stable || entry.stats.stddevMs < stable->stats.stddevMs) {
-            stable = &entry;
-        }
-        if (entry.systemResolver && !system) {
-            system = &entry;
+        if (entry.systemResolver && !hasSystem) {
+            system = entry;
+            hasSystem = true;
         }
         if (entry.stats.lossPercent > 1.0) {
             unreliable.push_back(QStringLiteral("%1 (%2% loss)").arg(entry.effectiveName()).arg(entry.stats.lossPercent, 0, 'f', 1));
         }
     }
 
+    std::sort(finished.begin(), finished.end(), [](const ResolverEntry& left, const ResolverEntry& right) {
+        if (left.stats.medianMs == right.stats.medianMs) {
+            return left.stats.meanMs < right.stats.meanMs;
+        }
+        return left.stats.medianMs < right.stats.medianMs;
+    });
+
     QStringList lines;
-    if (fastest) {
-        lines << QStringLiteral("Fastest resolver: %1, median %2 ms.").arg(fastest->effectiveName()).arg(fastest->stats.medianMs, 0, 'f', 1);
+    if (!finished.isEmpty()) {
+        const ResolverEntry& fastest = finished.first();
+        lines << QStringLiteral("Fastest resolver: %1, median %2 ms, mean %3 ms.")
+                     .arg(fastest.effectiveName())
+                     .arg(fastest.stats.medianMs, 0, 'f', 1)
+                     .arg(fastest.stats.meanMs, 0, 'f', 1);
     }
-    if (stable) {
-        lines << QStringLiteral("Most stable resolver: %1, stddev %2 ms.").arg(stable->effectiveName()).arg(stable->stats.stddevMs, 0, 'f', 1);
+    if (hasStable) {
+        lines << QStringLiteral("Most stable resolver: %1, stddev %2 ms.").arg(stable.effectiveName()).arg(stable.stats.stddevMs, 0, 'f', 1);
     }
     if (!unreliable.isEmpty()) {
         lines << QStringLiteral("Resolvers with >1% loss: %1.").arg(unreliable.join(QStringLiteral(", ")));
     }
-    if (system && fastest && system != fastest) {
-        lines << QStringLiteral("System DNS is %1 ms slower than the fastest alternative.")
-                     .arg(system->stats.medianMs - fastest->stats.medianMs, 0, 'f', 1);
-    } else if (system && fastest) {
-        lines << QStringLiteral("System DNS is the fastest measured resolver.");
+    if (hasSystem && system.status == ResolverStatus::Finished && !finished.isEmpty()) {
+        const ResolverEntry& fastest = finished.first();
+        if (system.id == fastest.id) {
+            lines << QStringLiteral("System DNS is the fastest measured resolver.");
+        } else {
+            lines << QStringLiteral("System DNS is %1 ms slower than the fastest alternative.")
+                         .arg(system.stats.medianMs - fastest.stats.medianMs, 0, 'f', 1);
+        }
+    } else if (hasSystem && system.status == ResolverStatus::Sidelined) {
+        lines << QStringLiteral("System DNS was sidelined during warm-up; it did not answer at least 3 of 10 reachability probes.");
+    }
+
+    if (!finished.isEmpty()) {
+        QStringList top;
+        const int topCount = std::min(5, static_cast<int>(finished.size()));
+        for (int i = 0; i < topCount; ++i) {
+            const ResolverEntry& entry = finished.at(i);
+            top << QStringLiteral("%1. %2: median %3 ms, mean %4 ms")
+                       .arg(i + 1)
+                       .arg(entry.effectiveName())
+                       .arg(entry.stats.medianMs, 0, 'f', 1)
+                       .arg(entry.stats.meanMs, 0, 'f', 1);
+        }
+        lines << QStringLiteral("Top performers:\n%1").arg(top.join(QStringLiteral("\n")));
+    }
+
+    if (!sidelined.isEmpty()) {
+        int ipv6 = 0;
+        int doh = 0;
+        int dot = 0;
+        int udp = 0;
+        for (const ResolverEntry& entry : sidelined) {
+            switch (entry.protocol) {
+            case ResolverProtocol::IPv6:
+                ++ipv6;
+                break;
+            case ResolverProtocol::DoH:
+                ++doh;
+                break;
+            case ResolverProtocol::DoT:
+                ++dot;
+                break;
+            case ResolverProtocol::IPv4:
+                ++udp;
+                break;
+            }
+        }
+        lines << QStringLiteral("Sidelined: %1 total (%2 IPv4, %3 IPv6, %4 DoH, %5 DoT).")
+                     .arg(sidelined.size())
+                     .arg(udp)
+                     .arg(ipv6)
+                     .arg(doh)
+                     .arg(dot);
     }
 
     const QString summary = lines.isEmpty() ? QStringLiteral("No completed resolver results.") : lines.join(QStringLiteral("\n"));

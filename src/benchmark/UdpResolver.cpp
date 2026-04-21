@@ -22,6 +22,11 @@ QString UdpResolver::id() const
     return m_entry.id;
 }
 
+void UdpResolver::setTimeoutMs(int timeoutMs)
+{
+    m_timeoutMs = timeoutMs;
+}
+
 void UdpResolver::query(const QString& domain, QueryCallback callback)
 {
     auto* socket = new QUdpSocket(this);

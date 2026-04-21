@@ -18,8 +18,8 @@
 namespace {
 
 constexpr int fullQueryTimeoutMs = 5000;
-constexpr int udpWarmupTimeoutMs = 50;
-constexpr int encryptedWarmupTimeoutMs = 5000;
+constexpr int udpWarmupTimeoutMs = 1000;
+constexpr int encryptedWarmupTimeoutMs = 8000;
 constexpr int warmupCount = 10;
 constexpr int warmupSuccessThreshold = 3;
 
@@ -79,12 +79,11 @@ public:
         postStatus(ResolverStatus::Running);
         postLog(QStringLiteral("Warming up %1 (%2).").arg(m_entry.effectiveName(), protocolToString(m_entry.protocol)));
 
-        const int warmupTimeoutMs = warmupTimeoutForProtocol(m_entry.protocol);
-        auto warmupResolver = createResolverForThread(m_entry, warmupTimeoutMs);
+        auto resolver = createResolverForThread(m_entry, warmupTimeoutForProtocol(m_entry.protocol));
         int successes = 0;
         for (int i = 0; i < warmupCount && !isCancelled(); ++i) {
             qint64 rttMs = 0;
-            if (queryBlocking(warmupResolver.get(), domainForSample(i), &rttMs)) {
+            if (queryBlocking(resolver.get(), domainForSample(i), &rttMs)) {
                 ++successes;
             }
         }
@@ -114,7 +113,7 @@ public:
 
         QVector<qint64> samples;
         samples.reserve(m_sampleCount);
-        auto resolver = createResolverForThread(m_entry, fullQueryTimeoutMs);
+        resolver->setTimeoutMs(fullQueryTimeoutMs);
 
         for (int i = 0; i < m_sampleCount && !isCancelled(); ++i) {
             const QString domain = domainForSample(i);

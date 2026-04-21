@@ -23,6 +23,11 @@ QString DohResolver::id() const
     return m_entry.id;
 }
 
+void DohResolver::setTimeoutMs(int timeoutMs)
+{
+    m_timeoutMs = timeoutMs;
+}
+
 QUrl DohResolver::endpoint() const
 {
     QUrl url(m_entry.address);

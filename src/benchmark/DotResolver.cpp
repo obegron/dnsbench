@@ -47,6 +47,12 @@ QString DotResolver::id() const
     return m_entry.id;
 }
 
+void DotResolver::setTimeoutMs(int timeoutMs)
+{
+    m_timeoutMs = timeoutMs;
+    m_timeout.setInterval(m_timeoutMs);
+}
+
 void DotResolver::query(const QString& domain, QueryCallback callback)
 {
     if (m_queryInFlight) {

@@ -15,6 +15,7 @@ public:
 
     void query(const QString& domain, QueryCallback callback) override;
     QString id() const override;
+    void setTimeoutMs(int timeoutMs) override;
     void cancel() override;
 
 private:
