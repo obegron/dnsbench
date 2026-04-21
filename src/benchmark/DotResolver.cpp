@@ -2,8 +2,6 @@
 
 #include "benchmark/DnsPacket.h"
 
-#include <QDateTime>
-#include <QElapsedTimer>
 #include <QRandomGenerator>
 #include <QtEndian>
 
@@ -39,8 +37,8 @@ DotResolver::DotResolver(const ResolverEntry& entry, int timeoutMs, QObject* par
             return;
         }
         const QByteArray response = m_buffer.mid(2, length);
-        finish(DnsPacket::isValidResponse(response, m_transactionId) ? QDateTime::currentMSecsSinceEpoch() - m_startedAt : 0,
-            DnsPacket::isValidResponse(response, m_transactionId));
+        const bool valid = DnsPacket::isValidResponse(response, m_transactionId);
+        finish(valid ? m_elapsed.elapsed() : 0, valid);
     });
 }
 
@@ -97,7 +95,7 @@ void DotResolver::sendCurrentQuery(const QByteArray& dnsPacket)
     framed.append(reinterpret_cast<const char*>(&beLength), sizeof(beLength));
     framed.append(dnsPacket);
 
-    m_startedAt = QDateTime::currentMSecsSinceEpoch();
+    m_elapsed.restart();
     m_timeout.start(m_timeoutMs);
     if (m_socket.write(framed) != framed.size()) {
         finish(0, false);

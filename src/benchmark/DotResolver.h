@@ -5,6 +5,7 @@
 
 #include <QSslSocket>
 #include <QTimer>
+#include <QElapsedTimer>
 
 class DotResolver : public BaseResolver {
     Q_OBJECT
@@ -23,7 +24,7 @@ private:
     QByteArray m_buffer;
     QTimer m_timeout;
     QueryCallback m_callback;
-    qint64 m_startedAt = 0;
+    QElapsedTimer m_elapsed;
     quint16 m_transactionId = 0;
     bool m_queryInFlight = false;
 

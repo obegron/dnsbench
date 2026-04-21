@@ -4,15 +4,251 @@
 #include "benchmark/DotResolver.h"
 #include "benchmark/UdpResolver.h"
 
+#include <QCoreApplication>
+#include <QEventLoop>
+#include <QMetaObject>
+#include <QPointer>
 #include <QRandomGenerator>
-#include <QTimer>
+#include <QRunnable>
 
 #include <algorithm>
+#include <memory>
 #include <random>
+
+namespace {
+
+constexpr int fullQueryTimeoutMs = 5000;
+constexpr int udpWarmupTimeoutMs = 50;
+constexpr int encryptedWarmupTimeoutMs = 5000;
+constexpr int warmupCount = 10;
+constexpr int warmupSuccessThreshold = 3;
+
+int warmupTimeoutForProtocol(ResolverProtocol protocol)
+{
+    switch (protocol) {
+    case ResolverProtocol::DoH:
+    case ResolverProtocol::DoT:
+        return encryptedWarmupTimeoutMs;
+    case ResolverProtocol::IPv4:
+    case ResolverProtocol::IPv6:
+        return udpWarmupTimeoutMs;
+    }
+    return udpWarmupTimeoutMs;
+}
+
+std::unique_ptr<BaseResolver> createResolverForThread(const ResolverEntry& entry, int timeoutMs)
+{
+    switch (entry.protocol) {
+    case ResolverProtocol::IPv4:
+    case ResolverProtocol::IPv6:
+        return std::make_unique<UdpResolver>(entry, timeoutMs);
+    case ResolverProtocol::DoH:
+        return std::make_unique<DohResolver>(entry, timeoutMs);
+    case ResolverProtocol::DoT:
+        return std::make_unique<DotResolver>(entry, timeoutMs);
+    }
+    return std::make_unique<UdpResolver>(entry, timeoutMs);
+}
+
+}
+
+class ResolverBenchmarkTask final : public QRunnable {
+public:
+    ResolverBenchmarkTask(
+        QPointer<BenchmarkController> controller,
+        ResolverEntry entry,
+        int sampleCount,
+        QStringList domains,
+        std::shared_ptr<std::atomic_bool> cancelled)
+        : m_controller(std::move(controller))
+        , m_entry(std::move(entry))
+        , m_sampleCount(sampleCount)
+        , m_domains(std::move(domains))
+        , m_cancelled(std::move(cancelled))
+    {
+        setAutoDelete(true);
+    }
+
+    void run() override
+    {
+        if (isCancelled()) {
+            postComplete();
+            return;
+        }
+
+        postStatus(ResolverStatus::Running);
+        postLog(QStringLiteral("Warming up %1 (%2).").arg(m_entry.effectiveName(), protocolToString(m_entry.protocol)));
+
+        const int warmupTimeoutMs = warmupTimeoutForProtocol(m_entry.protocol);
+        auto warmupResolver = createResolverForThread(m_entry, warmupTimeoutMs);
+        int successes = 0;
+        for (int i = 0; i < warmupCount && !isCancelled(); ++i) {
+            qint64 rttMs = 0;
+            if (queryBlocking(warmupResolver.get(), domainForSample(i), &rttMs)) {
+                ++successes;
+            }
+        }
+
+        if (isCancelled()) {
+            postComplete();
+            return;
+        }
+
+        if (successes < warmupSuccessThreshold) {
+            const Statistics stats = Statistics::fromSamples({}, m_sampleCount);
+            postStatus(ResolverStatus::Sidelined);
+            postResolverFinished(stats, ResolverStatus::Sidelined);
+            postLog(QStringLiteral("Sidelined %1: %2/%3 warm-up responses.")
+                    .arg(m_entry.effectiveName())
+                    .arg(successes)
+                    .arg(warmupCount));
+            postProgress(m_sampleCount);
+            postComplete();
+            return;
+        }
+
+        postLog(QStringLiteral("Warm-up passed for %1: %2/%3 responses.")
+                .arg(m_entry.effectiveName())
+                .arg(successes)
+                .arg(warmupCount));
+
+        QVector<qint64> samples;
+        samples.reserve(m_sampleCount);
+        auto resolver = createResolverForThread(m_entry, fullQueryTimeoutMs);
+
+        for (int i = 0; i < m_sampleCount && !isCancelled(); ++i) {
+            const QString domain = domainForSample(i);
+            postLog(QStringLiteral("Query %1 via %2.").arg(domain, m_entry.effectiveName()));
+
+            qint64 rttMs = 0;
+            const bool success = queryBlocking(resolver.get(), domain, &rttMs);
+            if (success) {
+                samples.push_back(rttMs);
+                postLog(QStringLiteral("Response %1 via %2 in %3 ms.")
+                        .arg(domain, m_entry.effectiveName())
+                        .arg(rttMs));
+            } else {
+                postLog(QStringLiteral("Timeout/failure for %1 via %2.").arg(domain, m_entry.effectiveName()));
+            }
+            postProgress(1);
+        }
+
+        if (!isCancelled()) {
+            const Statistics stats = Statistics::fromSamples(samples, m_sampleCount);
+            postResolverFinished(stats, ResolverStatus::Finished);
+            postLog(QStringLiteral("Finished %1: median %2 ms, loss %3%.")
+                    .arg(m_entry.effectiveName())
+                    .arg(stats.medianMs, 0, 'f', 1)
+                    .arg(stats.lossPercent, 0, 'f', 1));
+        }
+
+        postComplete();
+    }
+
+private:
+    QPointer<BenchmarkController> m_controller;
+    ResolverEntry m_entry;
+    int m_sampleCount = 0;
+    QStringList m_domains;
+    std::shared_ptr<std::atomic_bool> m_cancelled;
+
+    bool isCancelled() const
+    {
+        return !m_cancelled || m_cancelled->load(std::memory_order_relaxed);
+    }
+
+    QString domainForSample(int sampleIndex) const
+    {
+        return m_domains.at(sampleIndex % m_domains.size());
+    }
+
+    bool queryBlocking(BaseResolver* resolver, const QString& domain, qint64* rttMs)
+    {
+        if (isCancelled()) {
+            return false;
+        }
+
+        QEventLoop loop;
+        bool done = false;
+        bool success = false;
+        qint64 rtt = 0;
+
+        resolver->query(domain, [&](qint64 measuredRttMs, bool measuredSuccess) {
+            rtt = measuredRttMs;
+            success = measuredSuccess;
+            done = true;
+            loop.quit();
+        });
+
+        if (!done) {
+            loop.exec();
+        }
+
+        if (rttMs) {
+            *rttMs = rtt;
+        }
+        return !isCancelled() && success;
+    }
+
+    void postStatus(ResolverStatus status)
+    {
+        post([id = m_entry.id, status](BenchmarkController* controller) {
+            if (controller->m_running) {
+                emit controller->resolverStatusChanged(id, status);
+            }
+        });
+    }
+
+    void postLog(QString line)
+    {
+        post([line = std::move(line)](BenchmarkController* controller) {
+            if (controller->m_running) {
+                emit controller->logLine(line);
+            }
+        });
+    }
+
+    void postProgress(int completedDelta)
+    {
+        post([completedDelta](BenchmarkController* controller) {
+            controller->handleTaskProgress(completedDelta);
+        });
+    }
+
+    void postResolverFinished(Statistics stats, ResolverStatus status)
+    {
+        post([id = m_entry.id, stats, status](BenchmarkController* controller) {
+            if (controller->m_running) {
+                emit controller->resolverFinished(id, stats, status);
+            }
+        });
+    }
+
+    void postComplete()
+    {
+        post([](BenchmarkController* controller) {
+            controller->handleTaskComplete();
+        });
+    }
+
+    template <typename Function>
+    void post(Function&& function)
+    {
+        const QPointer<BenchmarkController> controller = m_controller;
+        const std::shared_ptr<std::atomic_bool> cancelled = m_cancelled;
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [controller, cancelled, fn = std::forward<Function>(function)]() mutable {
+            if (!controller || !cancelled || cancelled->load(std::memory_order_relaxed)) {
+                return;
+            }
+            fn(controller.data());
+        }, Qt::QueuedConnection);
+    }
+};
 
 BenchmarkController::BenchmarkController(QObject* parent)
     : QObject(parent)
 {
+    m_threadPool.setMaxThreadCount(20);
 }
 
 void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampleCount, QStringList domains)
@@ -28,15 +264,24 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
 
     std::shuffle(m_domains.begin(), m_domains.end(), std::mt19937(QRandomGenerator::global()->generate()));
 
-    m_currentResolver = -1;
-    m_currentSample = 0;
     m_completed = 0;
+    m_finishedResolvers = 0;
     m_total = m_resolvers.size() * m_sampleCount;
     m_running = true;
+    m_cancelled = std::make_shared<std::atomic_bool>(false);
     m_elapsed.start();
 
     emit progressUpdated(0, m_total, 0);
-    QTimer::singleShot(0, this, &BenchmarkController::startNextResolver);
+    emit logLine(QStringLiteral("Running up to %1 resolver(s) in parallel.").arg(m_threadPool.maxThreadCount()));
+
+    if (m_resolvers.isEmpty()) {
+        finishAll();
+        return;
+    }
+
+    for (const ResolverEntry& entry : std::as_const(m_resolvers)) {
+        m_threadPool.start(new ResolverBenchmarkTask(QPointer<BenchmarkController>(this), entry, m_sampleCount, m_domains, m_cancelled));
+    }
 }
 
 void BenchmarkController::stop()
@@ -46,10 +291,10 @@ void BenchmarkController::stop()
     }
 
     m_running = false;
-    if (m_resolver) {
-        m_resolver->cancel();
-        m_resolver.reset();
+    if (m_cancelled) {
+        m_cancelled->store(true, std::memory_order_relaxed);
     }
+    m_threadPool.clear();
     emit logLine(QStringLiteral("Benchmark stopped."));
     emit benchmarkFinished();
 }
@@ -59,133 +304,43 @@ bool BenchmarkController::isRunning() const
     return m_running;
 }
 
-void BenchmarkController::startNextResolver()
+void BenchmarkController::setMaxConcurrentResolvers(int maxConcurrentResolvers)
+{
+    m_threadPool.setMaxThreadCount(std::max(1, maxConcurrentResolvers));
+}
+
+void BenchmarkController::handleTaskProgress(int completedDelta)
 {
     if (!m_running) {
         return;
     }
 
-    ++m_currentResolver;
-    m_currentSample = 0;
-    m_currentSamples.clear();
-    m_resolver.reset();
+    m_completed = std::min(m_total, m_completed + completedDelta);
+    emit progressUpdated(m_completed, m_total, m_elapsed.elapsed());
+}
 
-    if (m_currentResolver >= m_resolvers.size()) {
+void BenchmarkController::handleTaskComplete()
+{
+    if (!m_running) {
+        return;
+    }
+
+    ++m_finishedResolvers;
+    if (m_finishedResolvers >= m_resolvers.size()) {
         finishAll();
-        return;
     }
-
-    const ResolverEntry& entry = m_resolvers.at(m_currentResolver);
-    emit resolverStatusChanged(entry.id, ResolverStatus::Running);
-    emit logLine(QStringLiteral("Warming up %1 (%2).").arg(entry.effectiveName(), protocolToString(entry.protocol)));
-    m_resolver.reset(createResolver(entry, 50));
-    runWarmup(0, 0);
-}
-
-void BenchmarkController::runWarmup(int completed, int successes)
-{
-    if (!m_running || !m_resolver) {
-        return;
-    }
-
-    constexpr int warmupCount = 10;
-    if (completed >= warmupCount) {
-        const ResolverEntry& entry = m_resolvers.at(m_currentResolver);
-        if (successes < 3) {
-            emit resolverStatusChanged(entry.id, ResolverStatus::Sidelined);
-            emit logLine(QStringLiteral("Sidelined %1: %2/%3 warm-up responses.").arg(entry.effectiveName()).arg(successes).arg(warmupCount));
-            m_completed += m_sampleCount;
-            emit progressUpdated(m_completed, m_total, m_elapsed.elapsed());
-            QTimer::singleShot(0, this, &BenchmarkController::startNextResolver);
-            return;
-        }
-
-        emit logLine(QStringLiteral("Warm-up passed for %1: %2/%3 responses.").arg(entry.effectiveName()).arg(successes).arg(warmupCount));
-        m_resolver.reset(createResolver(entry, 5000));
-        runNextSample();
-        return;
-    }
-
-    m_resolver->query(domainForSample(completed), [this, completed, successes](qint64 rtt, bool success) {
-        Q_UNUSED(rtt);
-        if (!m_running) {
-            return;
-        }
-        QTimer::singleShot(0, this, [this, completed, successes, success]() {
-            runWarmup(completed + 1, successes + (success ? 1 : 0));
-        });
-    });
-}
-
-void BenchmarkController::runNextSample()
-{
-    if (!m_running || !m_resolver) {
-        return;
-    }
-
-    if (m_currentSample >= m_sampleCount) {
-        finishCurrentResolver();
-        return;
-    }
-
-    const QString domain = domainForSample(m_currentSample);
-    const ResolverEntry& entry = m_resolvers.at(m_currentResolver);
-    emit logLine(QStringLiteral("Query %1 via %2.").arg(domain, entry.effectiveName()));
-
-    m_resolver->query(domain, [this, domain](qint64 rttMs, bool success) {
-        if (!m_running) {
-            return;
-        }
-
-        if (success) {
-            m_currentSamples.push_back(rttMs);
-            emit logLine(QStringLiteral("Response %1 in %2 ms.").arg(domain).arg(rttMs));
-        } else {
-            emit logLine(QStringLiteral("Timeout/failure for %1.").arg(domain));
-        }
-
-        ++m_currentSample;
-        ++m_completed;
-        emit progressUpdated(m_completed, m_total, m_elapsed.elapsed());
-        QTimer::singleShot(0, this, &BenchmarkController::runNextSample);
-    });
-}
-
-void BenchmarkController::finishCurrentResolver()
-{
-    const ResolverEntry& entry = m_resolvers.at(m_currentResolver);
-    const Statistics stats = Statistics::fromSamples(m_currentSamples, m_sampleCount);
-    emit resolverFinished(entry.id, stats);
-    emit logLine(QStringLiteral("Finished %1: median %2 ms, loss %3%.")
-        .arg(entry.effectiveName())
-        .arg(stats.medianMs, 0, 'f', 1)
-        .arg(stats.lossPercent, 0, 'f', 1));
-    QTimer::singleShot(0, this, &BenchmarkController::startNextResolver);
 }
 
 void BenchmarkController::finishAll()
 {
+    if (!m_running) {
+        return;
+    }
+
     m_running = false;
-    m_resolver.reset();
+    if (m_cancelled) {
+        m_cancelled->store(true, std::memory_order_relaxed);
+    }
     emit logLine(QStringLiteral("Benchmark complete."));
     emit benchmarkFinished();
-}
-
-BaseResolver* BenchmarkController::createResolver(const ResolverEntry& entry, int timeoutMs)
-{
-    switch (entry.protocol) {
-    case ResolverProtocol::IPv4:
-    case ResolverProtocol::IPv6:
-        return new UdpResolver(entry, timeoutMs, this);
-    case ResolverProtocol::DoH:
-        return new DohResolver(entry, timeoutMs, this);
-    case ResolverProtocol::DoT:
-        return new DotResolver(entry, timeoutMs, this);
-    }
-    return new UdpResolver(entry, timeoutMs, this);
-}
-
-QString BenchmarkController::domainForSample(int sampleIndex) const
-{
-    return m_domains.at(sampleIndex % m_domains.size());
 }

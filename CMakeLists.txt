@@ -52,6 +52,7 @@ set(DNSBENCH_APP_SOURCES
     src/benchmark/DotResolver.cpp
     src/benchmark/UdpResolver.cpp
     src/detection/LinuxDnsDetector.cpp
+    src/detection/SystemDnsDetector.cpp
     src/export/ResultExporter.cpp
 )
 

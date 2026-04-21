@@ -1,4 +1,5 @@
 build/
+dnsbench-results.*
 *.user
 *.swp
 .DS_Store

@@ -41,7 +41,7 @@ private:
     void buildUi();
     void connectController();
     void detectSystemDns();
-    void addDefaultResolversIfEmpty();
+    void addBuiltInResolvers();
     void addResolver();
     void startBenchmark();
     void stopBenchmark();

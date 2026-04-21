@@ -35,6 +35,7 @@ Implemented for the Linux target first:
 - Warm-up sidelining before full benchmark runs.
 - Statistics: median, mean, population stddev, min, max, and loss percent.
 - Linux system DNS detection.
+- Built-in public resolver candidates from Cloudflare, Google, Quad9, OpenDNS, AdGuard, and Control D.
 - CSV and plain-text export.
 - QSettings persistence for user resolvers and UI settings.
 - Unit tests for statistics, DNS packet construction, and Linux DNS detection parsing.

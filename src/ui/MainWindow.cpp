@@ -1,6 +1,6 @@
 #include "ui/MainWindow.h"
 
-#include "detection/LinuxDnsDetector.h"
+#include "detection/SystemDnsDetector.h"
 #include "export/ResultExporter.h"
 #include "ui/AddResolverDialog.h"
 #include "ui/ResultsTab.h"
@@ -71,7 +71,7 @@ MainWindow::MainWindow(QWidget* parent)
     connectController();
     loadSettings();
     detectSystemDns();
-    addDefaultResolversIfEmpty();
+    addBuiltInResolvers();
 }
 
 MainWindow::~MainWindow()
@@ -169,8 +169,8 @@ void MainWindow::buildUi()
 void MainWindow::connectController()
 {
     connect(&m_controller, &BenchmarkController::progressUpdated, this, &MainWindow::updateProgress);
-    connect(&m_controller, &BenchmarkController::resolverFinished, this, [this](const QString& resolverId, const Statistics& stats) {
-        m_model.updateStats(resolverId, stats);
+    connect(&m_controller, &BenchmarkController::resolverFinished, this, [this](const QString& resolverId, const Statistics& stats, ResolverStatus status) {
+        m_model.updateStats(resolverId, stats, status);
     });
     connect(&m_controller, &BenchmarkController::resolverStatusChanged, &m_model, &ResolverModel::updateStatus);
     connect(&m_controller, &BenchmarkController::logLine, this, &MainWindow::appendLogLine);
@@ -179,8 +179,13 @@ void MainWindow::connectController()
 
 void MainWindow::detectSystemDns()
 {
-    LinuxDnsDetector detector;
-    const QList<ResolverEntry> detected = detector.detect();
+    const std::unique_ptr<SystemDnsDetector> detector = createSystemDnsDetector();
+    if (!detector) {
+        appendLogLine(QStringLiteral("System DNS detection is not implemented for this platform yet."));
+        return;
+    }
+
+    const QList<ResolverEntry> detected = detector->detect();
     for (const ResolverEntry& entry : detected) {
         if (!m_model.find(entry.id)) {
             m_model.addResolver(entry);
@@ -189,17 +194,43 @@ void MainWindow::detectSystemDns()
     appendLogLine(QStringLiteral("Detected %1 system DNS resolver(s).").arg(detected.size()));
 }
 
-void MainWindow::addDefaultResolversIfEmpty()
+void MainWindow::addBuiltInResolvers()
 {
-    if (!m_model.entries().isEmpty()) {
-        return;
-    }
+    const QList<ResolverEntry> builtIns = {
+        publicResolver(QStringLiteral("Cloudflare 1.1.1.1"), QStringLiteral("1.1.1.1"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Cloudflare 1.0.0.1"), QStringLiteral("1.0.0.1"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Cloudflare IPv6"), QStringLiteral("2606:4700:4700::1111"), ResolverProtocol::IPv6),
+        publicResolver(QStringLiteral("Cloudflare DoH"), QStringLiteral("https://cloudflare-dns.com/dns-query"), ResolverProtocol::DoH),
+        publicResolver(QStringLiteral("Cloudflare DoT"), QStringLiteral("1.1.1.1"), ResolverProtocol::DoT, 853),
+        publicResolver(QStringLiteral("Google 8.8.8.8"), QStringLiteral("8.8.8.8"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Google 8.8.4.4"), QStringLiteral("8.8.4.4"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Google IPv6"), QStringLiteral("2001:4860:4860::8888"), ResolverProtocol::IPv6),
+        publicResolver(QStringLiteral("Google DoH"), QStringLiteral("https://dns.google/dns-query"), ResolverProtocol::DoH),
+        publicResolver(QStringLiteral("Google DoT"), QStringLiteral("dns.google"), ResolverProtocol::DoT, 853),
+        publicResolver(QStringLiteral("Quad9 9.9.9.9"), QStringLiteral("9.9.9.9"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Quad9 149.112.112.112"), QStringLiteral("149.112.112.112"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Quad9 IPv6"), QStringLiteral("2620:fe::fe"), ResolverProtocol::IPv6),
+        publicResolver(QStringLiteral("Quad9 DoH"), QStringLiteral("https://dns.quad9.net/dns-query"), ResolverProtocol::DoH),
+        publicResolver(QStringLiteral("Quad9 DoT"), QStringLiteral("dns.quad9.net"), ResolverProtocol::DoT, 853),
+        publicResolver(QStringLiteral("OpenDNS 208.67.222.222"), QStringLiteral("208.67.222.222"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("OpenDNS 208.67.220.220"), QStringLiteral("208.67.220.220"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("AdGuard 94.140.14.14"), QStringLiteral("94.140.14.14"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("AdGuard 94.140.15.15"), QStringLiteral("94.140.15.15"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("AdGuard DoH"), QStringLiteral("https://dns.adguard-dns.com/dns-query"), ResolverProtocol::DoH),
+        publicResolver(QStringLiteral("AdGuard DoT"), QStringLiteral("dns.adguard-dns.com"), ResolverProtocol::DoT, 853),
+        publicResolver(QStringLiteral("Control D 76.76.2.0"), QStringLiteral("76.76.2.0"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Control D 76.76.10.0"), QStringLiteral("76.76.10.0"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Control D DoH"), QStringLiteral("https://freedns.controld.com/p0"), ResolverProtocol::DoH),
+    };
 
-    m_model.addResolver(publicResolver(QStringLiteral("Cloudflare 1.1.1.1"), QStringLiteral("1.1.1.1"), ResolverProtocol::IPv4));
-    m_model.addResolver(publicResolver(QStringLiteral("Google 8.8.8.8"), QStringLiteral("8.8.8.8"), ResolverProtocol::IPv4));
-    m_model.addResolver(publicResolver(QStringLiteral("Quad9 9.9.9.9"), QStringLiteral("9.9.9.9"), ResolverProtocol::IPv4));
-    m_model.addResolver(publicResolver(QStringLiteral("Cloudflare DoH"), QStringLiteral("https://cloudflare-dns.com/dns-query"), ResolverProtocol::DoH));
-    m_model.addResolver(publicResolver(QStringLiteral("Cloudflare DoT"), QStringLiteral("1.1.1.1"), ResolverProtocol::DoT, 853));
+    int added = 0;
+    for (const ResolverEntry& entry : builtIns) {
+        if (!m_model.find(entry.id)) {
+            m_model.addResolver(entry);
+            ++added;
+        }
+    }
+    appendLogLine(QStringLiteral("Added %1 built-in public resolver(s).").arg(added));
 }
 
 void MainWindow::addResolver()
