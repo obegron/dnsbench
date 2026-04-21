@@ -218,6 +218,9 @@ void MainWindow::buildUi()
     toolbar->addAction(QStringLiteral("Detect System DNS"), this, &MainWindow::detectSystemDns);
     toolbar->addAction(QStringLiteral("Export"), this, &MainWindow::exportResults);
     toolbar->addAction(QStringLiteral("Clone Results"), this, &MainWindow::cloneResults);
+    toolbar->addAction(QStringLiteral("Clear Log"), this, [this]() {
+        m_log->clear();
+    });
     toolbar->addSeparator();
 
     m_ipv4Toggle = new QCheckBox(QStringLiteral("IPv4"), this);
@@ -252,6 +255,9 @@ void MainWindow::buildUi()
     benchmarkMenu->addAction(QStringLiteral("Start"), this, &MainWindow::startBenchmark);
     benchmarkMenu->addAction(QStringLiteral("Stop"), this, &MainWindow::stopBenchmark);
     benchmarkMenu->addAction(QStringLiteral("Clone Results"), this, &MainWindow::cloneResults);
+    benchmarkMenu->addAction(QStringLiteral("Clear Log"), this, [this]() {
+        m_log->clear();
+    });
 }
 
 void MainWindow::connectController()

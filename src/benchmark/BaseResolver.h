@@ -19,5 +19,6 @@ public:
     virtual void query(const QString& domain, QueryCallback callback) = 0;
     virtual QString id() const = 0;
     virtual void setTimeoutMs(int timeoutMs) = 0;
+    virtual QString lastErrorString() const { return {}; }
     virtual void cancel() {}
 };

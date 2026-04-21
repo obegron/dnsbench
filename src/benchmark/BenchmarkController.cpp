@@ -81,10 +81,14 @@ public:
 
         auto resolver = createResolverForThread(m_entry, warmupTimeoutForProtocol(m_entry.protocol));
         int successes = 0;
+        QString firstWarmupError;
         for (int i = 0; i < warmupCount && !isCancelled(); ++i) {
             qint64 rttMs = 0;
-            if (queryBlocking(resolver.get(), domainForSample(i), &rttMs)) {
+            QString error;
+            if (queryBlocking(resolver.get(), domainForSample(i), &rttMs, &error)) {
                 ++successes;
+            } else if (firstWarmupError.isEmpty()) {
+                firstWarmupError = error;
             }
         }
 
@@ -97,10 +101,14 @@ public:
             const Statistics stats = Statistics::fromSamples({}, m_sampleCount);
             postStatus(ResolverStatus::Sidelined);
             postResolverFinished(stats, ResolverStatus::Sidelined);
-            postLog(QStringLiteral("Sidelined %1: %2/%3 warm-up responses.")
+            QString message = QStringLiteral("Sidelined %1: %2/%3 warm-up responses.")
                     .arg(m_entry.effectiveName())
                     .arg(successes)
-                    .arg(warmupCount));
+                    .arg(warmupCount);
+            if (!firstWarmupError.isEmpty()) {
+                message += QStringLiteral(" Last error: %1.").arg(firstWarmupError);
+            }
+            postLog(message);
             postProgress(m_sampleCount);
             postComplete();
             return;
@@ -120,14 +128,17 @@ public:
             postLog(QStringLiteral("Query %1 via %2.").arg(domain, m_entry.effectiveName()));
 
             qint64 rttMs = 0;
-            const bool success = queryBlocking(resolver.get(), domain, &rttMs);
+            QString error;
+            const bool success = queryBlocking(resolver.get(), domain, &rttMs, &error);
             if (success) {
                 samples.push_back(rttMs);
                 postLog(QStringLiteral("Response %1 via %2 in %3 ms.")
                         .arg(domain, m_entry.effectiveName())
                         .arg(rttMs));
             } else {
-                postLog(QStringLiteral("Timeout/failure for %1 via %2.").arg(domain, m_entry.effectiveName()));
+                postLog(error.isEmpty()
+                    ? QStringLiteral("Timeout/failure for %1 via %2.").arg(domain, m_entry.effectiveName())
+                    : QStringLiteral("Failure for %1 via %2: %3.").arg(domain, m_entry.effectiveName(), error));
             }
             postProgress(1);
         }
@@ -161,7 +172,7 @@ private:
         return m_domains.at(sampleIndex % m_domains.size());
     }
 
-    bool queryBlocking(BaseResolver* resolver, const QString& domain, qint64* rttMs)
+    bool queryBlocking(BaseResolver* resolver, const QString& domain, qint64* rttMs, QString* errorString)
     {
         if (isCancelled()) {
             return false;
@@ -185,6 +196,9 @@ private:
 
         if (rttMs) {
             *rttMs = rtt;
+        }
+        if (errorString) {
+            *errorString = success ? QString() : resolver->lastErrorString();
         }
         return !isCancelled() && success;
     }
