@@ -6,6 +6,7 @@
 class Statistics {
 public:
     double medianMs = 0.0;
+    double p90Ms = 0.0;
     double meanMs = 0.0;
     double stddevMs = 0.0;
     double minMs = 0.0;

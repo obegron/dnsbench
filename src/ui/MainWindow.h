@@ -12,7 +12,6 @@ class QProgressBar;
 class QSortFilterProxyModel;
 class QSpinBox;
 class QTableView;
-class QTextEdit;
 class ResultsTab;
 
 class MainWindow : public QMainWindow {
@@ -35,7 +34,6 @@ private:
     QCheckBox* m_dohToggle = nullptr;
     QCheckBox* m_dotToggle = nullptr;
     ResultsTab* m_resultsTab = nullptr;
-    QTextEdit* m_conclusions = nullptr;
     QPlainTextEdit* m_log = nullptr;
 
     void buildUi();

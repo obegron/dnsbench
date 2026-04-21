@@ -2,7 +2,20 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
+
+namespace {
+
+double percentileNearestRank(const QVector<qint64>& sorted, double percentile)
+{
+    if (sorted.isEmpty()) {
+        return 0.0;
+    }
+
+    const int index = std::clamp(static_cast<int>(std::ceil(percentile * sorted.size())) - 1, 0, static_cast<int>(sorted.size()) - 1);
+    return static_cast<double>(sorted.at(index));
+}
+
+}
 
 Statistics Statistics::fromSamples(const QVector<qint64>& rttSamplesMs, int expectedTotal)
 {
@@ -28,6 +41,7 @@ Statistics Statistics::fromSamples(const QVector<qint64>& rttSamplesMs, int expe
     } else {
         result.medianMs = (static_cast<double>(sorted[(n / 2) - 1]) + static_cast<double>(sorted[n / 2])) / 2.0;
     }
+    result.p90Ms = percentileNearestRank(sorted, 0.90);
 
     double sum = 0.0;
     result.minMs = static_cast<double>(sorted.front());

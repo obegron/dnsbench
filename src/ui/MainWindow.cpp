@@ -31,7 +31,6 @@
 #include <QStyledItemDelegate>
 #include <QTabWidget>
 #include <QTableView>
-#include <QTextEdit>
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -192,8 +191,6 @@ void MainWindow::buildUi()
     m_table->setItemDelegateForColumn(ResolverModel::MedianColumn, new LatencyBarDelegate(m_table));
 
     m_resultsTab = new ResultsTab(this);
-    m_conclusions = new QTextEdit(this);
-    m_conclusions->setReadOnly(true);
     m_log = new QPlainTextEdit(this);
     m_log->setReadOnly(true);
     QFont monospace(QStringLiteral("monospace"));
@@ -202,7 +199,6 @@ void MainWindow::buildUi()
 
     auto* tabs = new QTabWidget(this);
     tabs->addTab(m_resultsTab, QStringLiteral("Results"));
-    tabs->addTab(m_conclusions, QStringLiteral("Conclusions"));
     tabs->addTab(m_log, QStringLiteral("Log"));
 
     auto* splitter = new QSplitter(Qt::Vertical, this);
@@ -321,7 +317,7 @@ void MainWindow::startBenchmark()
     m_model.setProtocolEnabled(ResolverProtocol::DoT, m_dotToggle->isChecked());
     m_model.resetRuntimeState();
     m_progress->setValue(0);
-    m_conclusions->clear();
+    m_resultsTab->setSummary(QStringLiteral("Benchmark running..."));
     appendLogLine(QStringLiteral("Starting benchmark."));
     m_controller.start(m_model.enabledEntries(), m_sampleSpin->value(), loadDomains());
 }
@@ -392,9 +388,14 @@ void MainWindow::updateConclusions()
     ResolverEntry system;
     bool hasStable = false;
     bool hasSystem = false;
+    int dohTotal = 0;
+    int dohFinished = 0;
     QStringList unreliable;
 
     for (const ResolverEntry& entry : entries) {
+        if (entry.protocol == ResolverProtocol::DoH && entry.enabled) {
+            ++dohTotal;
+        }
         if (entry.status == ResolverStatus::Sidelined) {
             sidelined.push_back(entry);
             if (entry.systemResolver && !hasSystem) {
@@ -405,6 +406,9 @@ void MainWindow::updateConclusions()
         }
         if (entry.status != ResolverStatus::Finished || !entry.stats.hasSamples()) {
             continue;
+        }
+        if (entry.protocol == ResolverProtocol::DoH) {
+            ++dohFinished;
         }
         finished.push_back(entry);
         if (!hasStable || entry.stats.stddevMs < stable.stats.stddevMs) {
@@ -430,9 +434,10 @@ void MainWindow::updateConclusions()
     QStringList lines;
     if (!finished.isEmpty()) {
         const ResolverEntry& fastest = finished.first();
-        lines << QStringLiteral("Fastest resolver: %1, median %2 ms, mean %3 ms.")
+        lines << QStringLiteral("Fastest resolver: %1, median %2 ms, p90 %3 ms, mean %4 ms.")
                      .arg(fastest.effectiveName())
                      .arg(fastest.stats.medianMs, 0, 'f', 1)
+                     .arg(fastest.stats.p90Ms, 0, 'f', 1)
                      .arg(fastest.stats.meanMs, 0, 'f', 1);
     }
     if (hasStable) {
@@ -458,10 +463,11 @@ void MainWindow::updateConclusions()
         const int topCount = std::min(5, static_cast<int>(finished.size()));
         for (int i = 0; i < topCount; ++i) {
             const ResolverEntry& entry = finished.at(i);
-            top << QStringLiteral("%1. %2: median %3 ms, mean %4 ms")
+            top << QStringLiteral("%1. %2: median %3 ms, p90 %4 ms, mean %5 ms")
                        .arg(i + 1)
                        .arg(entry.effectiveName())
                        .arg(entry.stats.medianMs, 0, 'f', 1)
+                       .arg(entry.stats.p90Ms, 0, 'f', 1)
                        .arg(entry.stats.meanMs, 0, 'f', 1);
         }
         lines << QStringLiteral("Top performers:\n%1").arg(top.join(QStringLiteral("\n")));
@@ -496,8 +502,11 @@ void MainWindow::updateConclusions()
                      .arg(dot);
     }
 
+    if (dohTotal > 0 && dohFinished == 0) {
+        lines << QStringLiteral("All enabled DoH resolvers failed warm-up. Check whether HTTPS/443 to DoH providers is blocked by the network, firewall, or DNS policy.");
+    }
+
     const QString summary = lines.isEmpty() ? QStringLiteral("No completed resolver results.") : lines.join(QStringLiteral("\n"));
-    m_conclusions->setPlainText(summary);
     m_resultsTab->setSummary(summary);
 }
 

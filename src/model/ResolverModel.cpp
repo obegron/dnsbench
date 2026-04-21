@@ -131,6 +131,8 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
             return entry.pinned;
         case MedianColumn:
             return entry.stats.medianMs;
+        case P90Column:
+            return entry.stats.p90Ms;
         case MeanColumn:
             return entry.stats.meanMs;
         case StddevColumn:
@@ -162,6 +164,7 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
     case ProtocolColumn:
         return protocolToString(entry.protocol);
     case MedianColumn:
+    case P90Column:
     case MeanColumn:
     case StddevColumn:
     case MinColumn:
@@ -194,6 +197,8 @@ QVariant ResolverModel::headerData(int section, Qt::Orientation orientation, int
         return QStringLiteral("Protocol");
     case MedianColumn:
         return QStringLiteral("Median (ms)");
+    case P90Column:
+        return QStringLiteral("P90 (ms)");
     case MeanColumn:
         return QStringLiteral("Mean (ms)");
     case StddevColumn:
@@ -421,6 +426,8 @@ QVariant ResolverModel::statData(const Statistics& stats, Column column, int rol
     switch (column) {
     case MedianColumn:
         return locale.toString(stats.medianMs, 'f', 1);
+    case P90Column:
+        return locale.toString(stats.p90Ms, 'f', 1);
     case MeanColumn:
         return locale.toString(stats.meanMs, 'f', 1);
     case StddevColumn:

@@ -15,6 +15,7 @@ public:
         AddressColumn,
         ProtocolColumn,
         MedianColumn,
+        P90Column,
         MeanColumn,
         StddevColumn,
         MinColumn,

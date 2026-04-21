@@ -13,6 +13,7 @@ private slots:
         QCOMPARE(stats.lossCount, 2);
         QCOMPARE(stats.totalCount, 5);
         QCOMPARE(stats.medianMs, 20.0);
+        QCOMPARE(stats.p90Ms, 30.0);
         QCOMPARE(stats.meanMs, 20.0);
         QCOMPARE(stats.minMs, 10.0);
         QCOMPARE(stats.maxMs, 30.0);
@@ -23,6 +24,7 @@ private slots:
     {
         const Statistics stats = Statistics::fromSamples({2, 4, 4, 4, 5, 5, 7, 9}, 8);
         QCOMPARE(stats.medianMs, 4.5);
+        QCOMPARE(stats.p90Ms, 9.0);
         QCOMPARE(stats.meanMs, 5.0);
         QCOMPARE(stats.stddevMs, 2.0);
     }
