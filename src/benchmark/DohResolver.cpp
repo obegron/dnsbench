@@ -2,6 +2,8 @@
 
 #include "benchmark/DnsPacket.h"
 
+#include <QHostAddress>
+#include <QHostInfo>
 #include <QElapsedTimer>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -10,6 +12,39 @@
 #include <QTimer>
 
 #include <memory>
+
+namespace {
+
+QString resolutionHint(const QString& host)
+{
+    const QHostInfo info = QHostInfo::fromName(host);
+    if (info.error() != QHostInfo::NoError) {
+        return QStringLiteral(" Host lookup for %1 failed: %2.").arg(host, info.errorString());
+    }
+
+    QStringList addresses;
+    bool sinkholeLike = false;
+    for (const QHostAddress& address : info.addresses()) {
+        const QString text = address.toString();
+        addresses.push_back(text);
+        if (text == QLatin1String("0.0.0.0") || text == QLatin1String("::")
+            || text == QLatin1String("::1") || text.startsWith(QStringLiteral("127."))) {
+            sinkholeLike = true;
+        }
+    }
+
+    if (addresses.isEmpty()) {
+        return QStringLiteral(" Host lookup for %1 returned no addresses.").arg(host);
+    }
+
+    return sinkholeLike
+        ? QStringLiteral(" %1 resolves to %2, which looks like DNS blocking/sinkholing; allowlist this DoH hostname in your current DNS filter.")
+              .arg(host, addresses.join(QStringLiteral(", ")))
+        : QStringLiteral(" %1 resolves to %2. If this is a filtering or internal address, allowlist the DoH hostname.")
+              .arg(host, addresses.join(QStringLiteral(", ")));
+}
+
+}
 
 DohResolver::DohResolver(const ResolverEntry& entry, int timeoutMs, QObject* parent)
     : BaseResolver(parent)
@@ -83,7 +118,10 @@ void DohResolver::query(const QString& domain, QueryCallback callback)
         const QVariant statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
         bool success = false;
         if (reply->error() != QNetworkReply::NoError) {
-            m_lastError = QStringLiteral("%1 (%2)").arg(reply->errorString()).arg(static_cast<int>(reply->error()));
+            m_lastError = QStringLiteral("%1 (%2)%3")
+                .arg(reply->errorString())
+                .arg(static_cast<int>(reply->error()))
+                .arg(resolutionHint(reply->url().host()));
         } else if (statusCode.isValid() && (statusCode.toInt() < 200 || statusCode.toInt() >= 300)) {
             m_lastError = QStringLiteral("HTTP %1 from %2").arg(statusCode.toInt()).arg(reply->url().toString());
         } else if (!DnsPacket::isValidResponse(payload, transactionId)) {

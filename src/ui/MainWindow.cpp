@@ -7,6 +7,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QClipboard>
 #include <QCheckBox>
 #include <QDateTime>
 #include <QDialog>
@@ -15,6 +16,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QMenuBar>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPlainTextEdit>
@@ -189,6 +191,8 @@ void MainWindow::buildUi()
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setAlternatingRowColors(true);
     m_table->setItemDelegateForColumn(ResolverModel::MedianColumn, new LatencyBarDelegate(m_table));
+    m_table->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_table, &QTableView::customContextMenuRequested, this, &MainWindow::showResolverContextMenu);
 
     m_resultsTab = new ResultsTab(this);
     m_log = new QPlainTextEdit(this);
@@ -365,6 +369,33 @@ void MainWindow::cloneResults()
     auto* layout = new QVBoxLayout(dialog);
     layout->addWidget(text);
     dialog->show();
+}
+
+void MainWindow::showResolverContextMenu(const QPoint& position)
+{
+    const QModelIndex proxyIndex = m_table->indexAt(position);
+    if (!proxyIndex.isValid()) {
+        return;
+    }
+
+    const QModelIndex sourceIndex = m_proxy->mapToSource(proxyIndex);
+    const QModelIndex addressIndex = m_model.index(sourceIndex.row(), ResolverModel::AddressColumn);
+    const QModelIndex nameIndex = m_model.index(sourceIndex.row(), ResolverModel::DisplayNameColumn);
+    const QString address = addressIndex.data(Qt::DisplayRole).toString();
+    const QString name = nameIndex.data(Qt::DisplayRole).toString();
+    const QString cellText = sourceIndex.data(Qt::DisplayRole).toString();
+
+    QMenu menu(this);
+    menu.addAction(QStringLiteral("Copy Address"), this, [address]() {
+        QApplication::clipboard()->setText(address);
+    });
+    menu.addAction(QStringLiteral("Copy Display Name"), this, [name]() {
+        QApplication::clipboard()->setText(name);
+    });
+    menu.addAction(QStringLiteral("Copy Cell"), this, [cellText]() {
+        QApplication::clipboard()->setText(cellText);
+    });
+    menu.exec(m_table->viewport()->mapToGlobal(position));
 }
 
 void MainWindow::appendLogLine(const QString& line)

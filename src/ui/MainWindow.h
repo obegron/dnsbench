@@ -4,6 +4,7 @@
 #include "model/ResolverModel.h"
 
 #include <QMainWindow>
+#include <QPoint>
 
 class QCheckBox;
 class QLabel;
@@ -45,6 +46,7 @@ private:
     void stopBenchmark();
     void exportResults();
     void cloneResults();
+    void showResolverContextMenu(const QPoint& position);
     void appendLogLine(const QString& line);
     void updateProgress(int completed, int total, qint64 elapsedMs);
     void updateConclusions();
