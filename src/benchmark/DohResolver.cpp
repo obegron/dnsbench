@@ -5,7 +5,6 @@
 #include <QElapsedTimer>
 #include <QNetworkReply>
 #include <QNetworkRequest>
-#include <QRandomGenerator>
 #include <QTimer>
 
 #include <memory>
@@ -39,7 +38,7 @@ QUrl DohResolver::endpoint() const
 
 void DohResolver::query(const QString& domain, QueryCallback callback)
 {
-    const quint16 transactionId = static_cast<quint16>(QRandomGenerator::global()->bounded(1, 0xffff));
+    const quint16 transactionId = 0;
     const QByteArray queryPacket = DnsPacket::buildQuery(domain, transactionId, 1);
     if (queryPacket.isEmpty() || !endpoint().isValid()) {
         callback(0, false);

@@ -21,6 +21,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
+#include <QSet>
 #include <QSortFilterProxyModel>
 #include <QSpinBox>
 #include <QSplitter>
@@ -105,8 +106,51 @@ ResolverEntry publicResolver(const QString& name, const QString& address, Resolv
     entry.address = address;
     entry.protocol = protocol;
     entry.port = port;
+    entry.builtInResolver = true;
     entry.id = ResolverModel::makeId(entry);
     return entry;
+}
+
+QList<ResolverEntry> builtInResolvers()
+{
+    return {
+        publicResolver(QStringLiteral("Cloudflare 1.1.1.1"), QStringLiteral("1.1.1.1"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Cloudflare 1.0.0.1"), QStringLiteral("1.0.0.1"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Cloudflare IPv6"), QStringLiteral("2606:4700:4700::1111"), ResolverProtocol::IPv6),
+        publicResolver(QStringLiteral("Cloudflare DoH"), QStringLiteral("https://cloudflare-dns.com/dns-query"), ResolverProtocol::DoH),
+        publicResolver(QStringLiteral("Cloudflare DoT"), QStringLiteral("1.1.1.1"), ResolverProtocol::DoT, 853),
+        publicResolver(QStringLiteral("Google 8.8.8.8"), QStringLiteral("8.8.8.8"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Google 8.8.4.4"), QStringLiteral("8.8.4.4"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Google IPv6"), QStringLiteral("2001:4860:4860::8888"), ResolverProtocol::IPv6),
+        publicResolver(QStringLiteral("Google DoH"), QStringLiteral("https://dns.google/dns-query"), ResolverProtocol::DoH),
+        publicResolver(QStringLiteral("Google DoT"), QStringLiteral("8.8.8.8"), ResolverProtocol::DoT, 853),
+        publicResolver(QStringLiteral("Quad9 9.9.9.9"), QStringLiteral("9.9.9.9"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Quad9 149.112.112.112"), QStringLiteral("149.112.112.112"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Quad9 IPv6"), QStringLiteral("2620:fe::fe"), ResolverProtocol::IPv6),
+        publicResolver(QStringLiteral("Quad9 DoH"), QStringLiteral("https://dns.quad9.net/dns-query"), ResolverProtocol::DoH),
+        publicResolver(QStringLiteral("Quad9 DoT"), QStringLiteral("9.9.9.9"), ResolverProtocol::DoT, 853),
+        publicResolver(QStringLiteral("OpenDNS 208.67.222.222"), QStringLiteral("208.67.222.222"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("OpenDNS 208.67.220.220"), QStringLiteral("208.67.220.220"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("AdGuard 94.140.14.14"), QStringLiteral("94.140.14.14"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("AdGuard 94.140.15.15"), QStringLiteral("94.140.15.15"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("AdGuard DoH"), QStringLiteral("https://dns.adguard-dns.com/dns-query"), ResolverProtocol::DoH),
+        publicResolver(QStringLiteral("AdGuard DoT"), QStringLiteral("94.140.14.14"), ResolverProtocol::DoT, 853),
+        publicResolver(QStringLiteral("Control D 76.76.2.0"), QStringLiteral("76.76.2.0"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Control D 76.76.10.0"), QStringLiteral("76.76.10.0"), ResolverProtocol::IPv4),
+        publicResolver(QStringLiteral("Control D DoH"), QStringLiteral("https://freedns.controld.com/p0"), ResolverProtocol::DoH),
+    };
+}
+
+bool isBuiltInResolverName(const QString& displayName)
+{
+    static const QSet<QString> names = [] {
+        QSet<QString> result;
+        for (const ResolverEntry& entry : builtInResolvers()) {
+            result.insert(entry.displayName);
+        }
+        return result;
+    }();
+    return names.contains(displayName);
 }
 
 }
@@ -244,35 +288,8 @@ void MainWindow::detectSystemDns()
 
 void MainWindow::addBuiltInResolvers()
 {
-    const QList<ResolverEntry> builtIns = {
-        publicResolver(QStringLiteral("Cloudflare 1.1.1.1"), QStringLiteral("1.1.1.1"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Cloudflare 1.0.0.1"), QStringLiteral("1.0.0.1"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Cloudflare IPv6"), QStringLiteral("2606:4700:4700::1111"), ResolverProtocol::IPv6),
-        publicResolver(QStringLiteral("Cloudflare DoH"), QStringLiteral("https://cloudflare-dns.com/dns-query"), ResolverProtocol::DoH),
-        publicResolver(QStringLiteral("Cloudflare DoT"), QStringLiteral("1.1.1.1"), ResolverProtocol::DoT, 853),
-        publicResolver(QStringLiteral("Google 8.8.8.8"), QStringLiteral("8.8.8.8"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Google 8.8.4.4"), QStringLiteral("8.8.4.4"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Google IPv6"), QStringLiteral("2001:4860:4860::8888"), ResolverProtocol::IPv6),
-        publicResolver(QStringLiteral("Google DoH"), QStringLiteral("https://dns.google/dns-query"), ResolverProtocol::DoH),
-        publicResolver(QStringLiteral("Google DoT"), QStringLiteral("dns.google"), ResolverProtocol::DoT, 853),
-        publicResolver(QStringLiteral("Quad9 9.9.9.9"), QStringLiteral("9.9.9.9"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Quad9 149.112.112.112"), QStringLiteral("149.112.112.112"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Quad9 IPv6"), QStringLiteral("2620:fe::fe"), ResolverProtocol::IPv6),
-        publicResolver(QStringLiteral("Quad9 DoH"), QStringLiteral("https://dns.quad9.net/dns-query"), ResolverProtocol::DoH),
-        publicResolver(QStringLiteral("Quad9 DoT"), QStringLiteral("dns.quad9.net"), ResolverProtocol::DoT, 853),
-        publicResolver(QStringLiteral("OpenDNS 208.67.222.222"), QStringLiteral("208.67.222.222"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("OpenDNS 208.67.220.220"), QStringLiteral("208.67.220.220"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("AdGuard 94.140.14.14"), QStringLiteral("94.140.14.14"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("AdGuard 94.140.15.15"), QStringLiteral("94.140.15.15"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("AdGuard DoH"), QStringLiteral("https://dns.adguard-dns.com/dns-query"), ResolverProtocol::DoH),
-        publicResolver(QStringLiteral("AdGuard DoT"), QStringLiteral("dns.adguard-dns.com"), ResolverProtocol::DoT, 853),
-        publicResolver(QStringLiteral("Control D 76.76.2.0"), QStringLiteral("76.76.2.0"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Control D 76.76.10.0"), QStringLiteral("76.76.10.0"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Control D DoH"), QStringLiteral("https://freedns.controld.com/p0"), ResolverProtocol::DoH),
-    };
-
     int added = 0;
-    for (const ResolverEntry& entry : builtIns) {
+    for (const ResolverEntry& entry : builtInResolvers()) {
         if (!m_model.find(entry.id)) {
             m_model.addResolver(entry);
             ++added;
@@ -505,6 +522,9 @@ void MainWindow::loadSettings()
         entry.port = settings.value(QStringLiteral("port"), defaultPortForProtocol(entry.protocol)).toInt();
         entry.pinned = settings.value(QStringLiteral("pinned"), false).toBool();
         entry.enabled = settings.value(QStringLiteral("enabled"), true).toBool();
+        if (isBuiltInResolverName(entry.displayName)) {
+            continue;
+        }
         if (ok && !entry.address.isEmpty()) {
             entry.id = ResolverModel::makeId(entry);
             m_model.addResolver(entry);
@@ -527,7 +547,7 @@ void MainWindow::saveSettings()
     settings.beginWriteArray(QStringLiteral("resolvers"));
     int index = 0;
     for (const ResolverEntry& entry : entries) {
-        if (entry.systemResolver) {
+        if (entry.systemResolver || entry.builtInResolver) {
             continue;
         }
         settings.setArrayIndex(index++);

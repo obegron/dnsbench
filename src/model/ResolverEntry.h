@@ -30,6 +30,7 @@ struct ResolverEntry {
     bool pinned = false;
     bool enabled = true;
     bool systemResolver = false;
+    bool builtInResolver = false;
     ResolverStatus status = ResolverStatus::Idle;
     Statistics stats;
 
