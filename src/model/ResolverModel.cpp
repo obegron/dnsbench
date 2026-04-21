@@ -149,6 +149,10 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
         return entry.pinned ? Qt::Checked : Qt::Unchecked;
     }
 
+    if (role == Qt::ToolTipRole && column == PinColumn) {
+        return QStringLiteral("Pin keeps this resolver at the top while sorting. It does not control benchmark selection.");
+    }
+
     if (role == Qt::ForegroundRole && (!entry.enabled || entry.status == ResolverStatus::Disabled)) {
         return QBrush(QColor(130, 130, 130));
     }
@@ -370,6 +374,18 @@ void ResolverModel::updateStatus(const QString& id, ResolverStatus status)
     emit resolverChanged(m_entries[row]);
 }
 
+void ResolverModel::setResolverEnabled(const QString& id, bool enabled)
+{
+    const int row = rowForId(id);
+    if (row < 0) {
+        return;
+    }
+
+    m_entries[row].enabled = enabled;
+    emit dataChanged(index(row, 0), index(row, ColumnCount - 1));
+    emit resolverChanged(m_entries[row]);
+}
+
 void ResolverModel::setProtocolEnabled(ResolverProtocol protocol, bool enabled)
 {
     for (int row = 0; row < m_entries.size(); ++row) {
@@ -393,6 +409,19 @@ void ResolverModel::resetRuntimeState()
         entry.status = ResolverStatus::Idle;
     }
     emit dataChanged(index(0, 0), index(m_entries.size() - 1, ColumnCount - 1));
+}
+
+void ResolverModel::resetRuntimeState(const QString& id)
+{
+    const int row = rowForId(id);
+    if (row < 0) {
+        return;
+    }
+
+    m_entries[row].stats = {};
+    m_entries[row].status = ResolverStatus::Idle;
+    emit dataChanged(index(row, MedianColumn), index(row, StatusColumn));
+    emit resolverChanged(m_entries[row]);
 }
 
 QList<ResolverEntry> ResolverModel::entries() const

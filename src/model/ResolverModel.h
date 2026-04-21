@@ -40,8 +40,10 @@ public:
     void removeRowsByIndexes(const QModelIndexList& indexes);
     void updateStats(const QString& id, const Statistics& stats, ResolverStatus status = ResolverStatus::Finished);
     void updateStatus(const QString& id, ResolverStatus status);
+    void setResolverEnabled(const QString& id, bool enabled);
     void setProtocolEnabled(ResolverProtocol protocol, bool enabled);
     void resetRuntimeState();
+    void resetRuntimeState(const QString& id);
 
     QList<ResolverEntry> entries() const;
     QList<ResolverEntry> enabledEntries() const;

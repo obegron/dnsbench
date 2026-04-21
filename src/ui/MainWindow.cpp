@@ -341,6 +341,11 @@ void MainWindow::addResolver()
 
 void MainWindow::startBenchmark()
 {
+    if (m_controller.isRunning()) {
+        QMessageBox::information(this, QStringLiteral("Benchmark Running"), QStringLiteral("Stop the current benchmark before starting another one."));
+        return;
+    }
+
     m_model.setProtocolEnabled(ResolverProtocol::IPv4, m_ipv4Toggle->isChecked());
     m_model.setProtocolEnabled(ResolverProtocol::IPv6, m_ipv6Toggle->isChecked());
     m_model.setProtocolEnabled(ResolverProtocol::DoH, m_dohToggle->isChecked());
@@ -350,6 +355,23 @@ void MainWindow::startBenchmark()
     m_resultsTab->setSummary(QStringLiteral("Benchmark running..."));
     appendLogLine(QStringLiteral("Starting benchmark."));
     m_controller.start(m_model.enabledEntries(), m_sampleSpin->value(), loadDomains());
+}
+
+void MainWindow::startBenchmarkForResolver(const ResolverEntry& entry)
+{
+    if (m_controller.isRunning()) {
+        QMessageBox::information(this, QStringLiteral("Benchmark Running"), QStringLiteral("Stop the current benchmark before starting another one."));
+        return;
+    }
+
+    ResolverEntry runEntry = entry;
+    runEntry.enabled = true;
+    m_model.setResolverEnabled(runEntry.id, true);
+    m_model.resetRuntimeState(runEntry.id);
+    m_progress->setValue(0);
+    m_resultsTab->setSummary(QStringLiteral("Benchmark running for %1...").arg(runEntry.effectiveName()));
+    appendLogLine(QStringLiteral("Starting single-resolver benchmark for %1.").arg(runEntry.effectiveName()));
+    m_controller.start({runEntry}, m_sampleSpin->value(), loadDomains());
 }
 
 void MainWindow::stopBenchmark()
@@ -404,8 +426,17 @@ void MainWindow::showResolverContextMenu(const QPoint& position)
     const QString address = addressIndex.data(Qt::DisplayRole).toString();
     const QString name = nameIndex.data(Qt::DisplayRole).toString();
     const QString cellText = sourceIndex.data(Qt::DisplayRole).toString();
+    const QList<ResolverEntry> entries = m_model.entries();
+    if (sourceIndex.row() < 0 || sourceIndex.row() >= entries.size()) {
+        return;
+    }
+    const ResolverEntry entry = entries.at(sourceIndex.row());
 
     QMenu menu(this);
+    menu.addAction(QStringLiteral("Benchmark This Resolver"), this, [this, entry]() {
+        startBenchmarkForResolver(entry);
+    });
+    menu.addSeparator();
     menu.addAction(QStringLiteral("Copy Address"), this, [address]() {
         QApplication::clipboard()->setText(address);
     });

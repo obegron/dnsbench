@@ -43,6 +43,7 @@ private:
     void addBuiltInResolvers();
     void addResolver();
     void startBenchmark();
+    void startBenchmarkForResolver(const ResolverEntry& entry);
     void stopBenchmark();
     void exportResults();
     void cloneResults();
