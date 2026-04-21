@@ -44,4 +44,5 @@ Q_DECLARE_METATYPE(ResolverEntry)
 QString protocolToString(ResolverProtocol protocol);
 ResolverProtocol protocolFromString(const QString& value, bool* ok = nullptr);
 QString statusToString(ResolverStatus status);
+QString resolverVerdict(const ResolverEntry& entry);
 int defaultPortForProtocol(ResolverProtocol protocol);

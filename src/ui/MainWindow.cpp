@@ -39,6 +39,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 
 namespace {
 
@@ -64,8 +65,8 @@ public:
 
     void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override
     {
-        const QString status = index.sibling(index.row(), ResolverModel::StatusColumn).data(Qt::DisplayRole).toString();
-        if (status != QLatin1String("Finished")) {
+        const auto status = static_cast<ResolverStatus>(index.sibling(index.row(), ResolverModel::StatusColumn).data(Qt::UserRole).toInt());
+        if (status != ResolverStatus::Finished) {
             QStyledItemDelegate::paint(painter, option, index);
             return;
         }
@@ -154,6 +155,30 @@ bool isBuiltInResolverName(const QString& displayName)
     return names.contains(displayName);
 }
 
+bool isReliableResult(const ResolverEntry& entry)
+{
+    return entry.stats.lossPercent <= 1.0;
+}
+
+bool resultLessThan(const ResolverEntry& left, const ResolverEntry& right)
+{
+    const bool leftReliable = isReliableResult(left);
+    const bool rightReliable = isReliableResult(right);
+    if (leftReliable != rightReliable) {
+        return leftReliable;
+    }
+    if (!leftReliable && left.stats.lossPercent != right.stats.lossPercent) {
+        return left.stats.lossPercent < right.stats.lossPercent;
+    }
+    if (left.stats.medianMs != right.stats.medianMs) {
+        return left.stats.medianMs < right.stats.medianMs;
+    }
+    if (left.stats.p90Ms != right.stats.p90Ms) {
+        return left.stats.p90Ms < right.stats.p90Ms;
+    }
+    return left.stats.meanMs < right.stats.meanMs;
+}
+
 }
 
 MainWindow::MainWindow(QWidget* parent)
@@ -197,6 +222,15 @@ void MainWindow::buildUi()
     m_resultsTab = new ResultsTab(this);
     m_log = new QPlainTextEdit(this);
     m_log->setReadOnly(true);
+    m_log->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_log, &QPlainTextEdit::customContextMenuRequested, this, [this](const QPoint& position) {
+        std::unique_ptr<QMenu> menu(m_log->createStandardContextMenu());
+        menu->addSeparator();
+        menu->addAction(QStringLiteral("Clear Log"), this, [this]() {
+            m_log->clear();
+        });
+        menu->exec(m_log->viewport()->mapToGlobal(position));
+    });
     QFont monospace(QStringLiteral("monospace"));
     monospace.setStyleHint(QFont::Monospace);
     m_log->setFont(monospace);
@@ -222,9 +256,6 @@ void MainWindow::buildUi()
     toolbar->addAction(QStringLiteral("Detect System DNS"), this, &MainWindow::detectSystemDns);
     toolbar->addAction(QStringLiteral("Export"), this, &MainWindow::exportResults);
     toolbar->addAction(QStringLiteral("Clone Results"), this, &MainWindow::cloneResults);
-    toolbar->addAction(QStringLiteral("Clear Log"), this, [this]() {
-        m_log->clear();
-    });
     toolbar->addSeparator();
 
     m_ipv4Toggle = new QCheckBox(QStringLiteral("IPv4"), this);
@@ -250,18 +281,7 @@ void MainWindow::buildUi()
     statusBar()->addPermanentWidget(m_etaLabel);
     statusBar()->addPermanentWidget(m_progress, 1);
 
-    auto* fileMenu = menuBar()->addMenu(QStringLiteral("File"));
-    fileMenu->addAction(QStringLiteral("Export Results"), this, &MainWindow::exportResults);
-    fileMenu->addSeparator();
-    fileMenu->addAction(QStringLiteral("Quit"), this, &QWidget::close);
-
-    auto* benchmarkMenu = menuBar()->addMenu(QStringLiteral("Benchmark"));
-    benchmarkMenu->addAction(QStringLiteral("Start"), this, &MainWindow::startBenchmark);
-    benchmarkMenu->addAction(QStringLiteral("Stop"), this, &MainWindow::stopBenchmark);
-    benchmarkMenu->addAction(QStringLiteral("Clone Results"), this, &MainWindow::cloneResults);
-    benchmarkMenu->addAction(QStringLiteral("Clear Log"), this, [this]() {
-        m_log->clear();
-    });
+    menuBar()->hide();
 }
 
 void MainWindow::connectController()
@@ -420,6 +440,7 @@ void MainWindow::updateConclusions()
 {
     const QList<ResolverEntry> entries = m_model.entries();
     QList<ResolverEntry> finished;
+    QList<ResolverEntry> reliableFinished;
     QList<ResolverEntry> sidelined;
     ResolverEntry stable;
     ResolverEntry system;
@@ -448,6 +469,9 @@ void MainWindow::updateConclusions()
             ++dohFinished;
         }
         finished.push_back(entry);
+        if (isReliableResult(entry)) {
+            reliableFinished.push_back(entry);
+        }
         if (!hasStable || entry.stats.stddevMs < stable.stats.stddevMs) {
             stable = entry;
             hasStable = true;
@@ -461,21 +485,19 @@ void MainWindow::updateConclusions()
         }
     }
 
-    std::sort(finished.begin(), finished.end(), [](const ResolverEntry& left, const ResolverEntry& right) {
-        if (left.stats.medianMs == right.stats.medianMs) {
-            return left.stats.meanMs < right.stats.meanMs;
-        }
-        return left.stats.medianMs < right.stats.medianMs;
-    });
+    std::sort(finished.begin(), finished.end(), resultLessThan);
+    std::sort(reliableFinished.begin(), reliableFinished.end(), resultLessThan);
 
     QStringList lines;
-    if (!finished.isEmpty()) {
-        const ResolverEntry& fastest = finished.first();
-        lines << QStringLiteral("Fastest resolver: %1, median %2 ms, p90 %3 ms, mean %4 ms.")
-                     .arg(fastest.effectiveName())
-                     .arg(fastest.stats.medianMs, 0, 'f', 1)
-                     .arg(fastest.stats.p90Ms, 0, 'f', 1)
-                     .arg(fastest.stats.meanMs, 0, 'f', 1);
+    if (!reliableFinished.isEmpty()) {
+        const ResolverEntry& recommended = reliableFinished.first();
+        lines << QStringLiteral("Fastest reliable resolver: %1, median %2 ms, p90 %3 ms, mean %4 ms.")
+                     .arg(recommended.effectiveName())
+                     .arg(recommended.stats.medianMs, 0, 'f', 1)
+                     .arg(recommended.stats.p90Ms, 0, 'f', 1)
+                     .arg(recommended.stats.meanMs, 0, 'f', 1);
+    } else if (!finished.isEmpty()) {
+        lines << QStringLiteral("No reliable resolver completed the benchmark; all finished resolvers had >1% loss.");
     }
     if (hasStable) {
         lines << QStringLiteral("Most stable resolver: %1, stddev %2 ms.").arg(stable.effectiveName()).arg(stable.stats.stddevMs, 0, 'f', 1);
@@ -483,23 +505,23 @@ void MainWindow::updateConclusions()
     if (!unreliable.isEmpty()) {
         lines << QStringLiteral("Resolvers with >1% loss: %1.").arg(unreliable.join(QStringLiteral(", ")));
     }
-    if (hasSystem && system.status == ResolverStatus::Finished && !finished.isEmpty()) {
-        const ResolverEntry& fastest = finished.first();
-        if (system.id == fastest.id) {
-            lines << QStringLiteral("System DNS is the fastest measured resolver.");
+    if (hasSystem && system.status == ResolverStatus::Finished && !reliableFinished.isEmpty()) {
+        const ResolverEntry& recommended = reliableFinished.first();
+        if (system.id == recommended.id) {
+            lines << QStringLiteral("System DNS is the fastest reliable measured resolver.");
         } else {
-            lines << QStringLiteral("System DNS is %1 ms slower than the fastest alternative.")
-                         .arg(system.stats.medianMs - fastest.stats.medianMs, 0, 'f', 1);
+            lines << QStringLiteral("System DNS is %1 ms slower than the fastest reliable alternative.")
+                         .arg(system.stats.medianMs - recommended.stats.medianMs, 0, 'f', 1);
         }
     } else if (hasSystem && system.status == ResolverStatus::Sidelined) {
         lines << QStringLiteral("System DNS was sidelined during warm-up; it did not answer at least 3 of 10 reachability probes.");
     }
 
-    if (!finished.isEmpty()) {
+    if (!reliableFinished.isEmpty()) {
         QStringList top;
-        const int topCount = std::min(5, static_cast<int>(finished.size()));
+        const int topCount = std::min(5, static_cast<int>(reliableFinished.size()));
         for (int i = 0; i < topCount; ++i) {
-            const ResolverEntry& entry = finished.at(i);
+            const ResolverEntry& entry = reliableFinished.at(i);
             top << QStringLiteral("%1. %2: median %3 ms, p90 %4 ms, mean %5 ms")
                        .arg(i + 1)
                        .arg(entry.effectiveName())
@@ -507,7 +529,7 @@ void MainWindow::updateConclusions()
                        .arg(entry.stats.p90Ms, 0, 'f', 1)
                        .arg(entry.stats.meanMs, 0, 'f', 1);
         }
-        lines << QStringLiteral("Top performers:\n%1").arg(top.join(QStringLiteral("\n")));
+        lines << QStringLiteral("Top reliable performers:\n%1").arg(top.join(QStringLiteral("\n")));
     }
 
     if (!sidelined.isEmpty()) {

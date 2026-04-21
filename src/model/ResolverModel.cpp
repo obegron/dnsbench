@@ -5,6 +5,8 @@
 #include <QLocale>
 #include <QSet>
 
+#include <algorithm>
+
 QString ResolverEntry::effectiveName() const
 {
     if (!displayName.trimmed().isEmpty()) {
@@ -80,6 +82,32 @@ QString statusToString(ResolverStatus status)
     return QStringLiteral("Idle");
 }
 
+QString resolverVerdict(const ResolverEntry& entry)
+{
+    if (!entry.enabled || entry.status == ResolverStatus::Disabled) {
+        return statusToString(ResolverStatus::Disabled);
+    }
+    if (entry.status != ResolverStatus::Finished) {
+        return statusToString(entry.status);
+    }
+    if (!entry.stats.hasSamples()) {
+        return QStringLiteral("No result");
+    }
+    if (entry.stats.lossPercent > 1.0) {
+        return QStringLiteral("Unreliable");
+    }
+    if (entry.stats.stddevMs > std::max(20.0, entry.stats.medianMs * 3.0)) {
+        return QStringLiteral("Spiky latency");
+    }
+    if (entry.stats.medianMs <= 10.0) {
+        return QStringLiteral("Very fast");
+    }
+    if (entry.stats.medianMs <= 25.0) {
+        return QStringLiteral("Fast");
+    }
+    return QStringLiteral("Measured");
+}
+
 int defaultPortForProtocol(ResolverProtocol protocol)
 {
     switch (protocol) {
@@ -143,6 +171,8 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
             return entry.stats.maxMs;
         case LossColumn:
             return entry.stats.lossPercent;
+        case StatusColumn:
+            return static_cast<int>(entry.enabled ? entry.status : ResolverStatus::Disabled);
         default:
             break;
         }
@@ -172,7 +202,7 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
     case LossColumn:
         return statData(entry.stats, column, role);
     case StatusColumn:
-        return statusToString(entry.enabled ? entry.status : ResolverStatus::Disabled);
+        return resolverVerdict(entry);
     case ColumnCount:
         break;
     }

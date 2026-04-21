@@ -22,6 +22,30 @@ QString stat(double value)
     return QString::number(value, 'f', 1);
 }
 
+bool isReliable(const ResolverEntry& entry)
+{
+    return entry.stats.lossPercent <= 1.0;
+}
+
+bool resultLessThan(const ResolverEntry& left, const ResolverEntry& right)
+{
+    const bool leftReliable = isReliable(left);
+    const bool rightReliable = isReliable(right);
+    if (leftReliable != rightReliable) {
+        return leftReliable;
+    }
+    if (!leftReliable && left.stats.lossPercent != right.stats.lossPercent) {
+        return left.stats.lossPercent < right.stats.lossPercent;
+    }
+    if (left.stats.medianMs != right.stats.medianMs) {
+        return left.stats.medianMs < right.stats.medianMs;
+    }
+    if (left.stats.p90Ms != right.stats.p90Ms) {
+        return left.stats.p90Ms < right.stats.p90Ms;
+    }
+    return left.stats.meanMs < right.stats.meanMs;
+}
+
 QHash<QString, int> ranksFor(const QList<ResolverEntry>& entries)
 {
     QList<ResolverEntry> ranked;
@@ -31,12 +55,7 @@ QHash<QString, int> ranksFor(const QList<ResolverEntry>& entries)
         }
     }
 
-    std::sort(ranked.begin(), ranked.end(), [](const ResolverEntry& left, const ResolverEntry& right) {
-        if (left.stats.medianMs == right.stats.medianMs) {
-            return left.stats.meanMs < right.stats.meanMs;
-        }
-        return left.stats.medianMs < right.stats.medianMs;
-    });
+    std::sort(ranked.begin(), ranked.end(), resultLessThan);
 
     QHash<QString, int> ranks;
     for (int i = 0; i < ranked.size(); ++i) {
@@ -47,28 +66,10 @@ QHash<QString, int> ranksFor(const QList<ResolverEntry>& entries)
 
 QString verdictFor(const ResolverEntry& entry, int rank)
 {
-    if (entry.status == ResolverStatus::Sidelined) {
-        return QStringLiteral("Sidelined");
-    }
-    if (entry.status != ResolverStatus::Finished || !entry.stats.hasSamples()) {
-        return QStringLiteral("No result");
-    }
-    if (entry.stats.lossPercent > 1.0) {
-        return QStringLiteral("Unreliable");
-    }
-    if (rank == 1) {
+    if (rank == 1 && entry.status == ResolverStatus::Finished && entry.stats.hasSamples() && entry.stats.lossPercent <= 1.0) {
         return QStringLiteral("Fastest");
     }
-    if (entry.stats.stddevMs > std::max(20.0, entry.stats.medianMs * 3.0)) {
-        return QStringLiteral("Spiky latency");
-    }
-    if (entry.stats.medianMs <= 10.0) {
-        return QStringLiteral("Very fast");
-    }
-    if (entry.stats.medianMs <= 25.0) {
-        return QStringLiteral("Fast");
-    }
-    return QStringLiteral("Measured");
+    return resolverVerdict(entry);
 }
 
 bool saveText(const QString& path, const QString& content, QString* error)
