@@ -5,6 +5,7 @@
 
 #include <QMainWindow>
 #include <QPoint>
+#include <QSet>
 
 class QCheckBox;
 class QLabel;
@@ -36,6 +37,7 @@ private:
     QCheckBox* m_dotToggle = nullptr;
     ResultsTab* m_resultsTab = nullptr;
     QPlainTextEdit* m_log = nullptr;
+    QSet<QString> m_currentRunIds;
 
     void buildUi();
     void connectController();

@@ -350,11 +350,17 @@ void MainWindow::startBenchmark()
     m_model.setProtocolEnabled(ResolverProtocol::IPv6, m_ipv6Toggle->isChecked());
     m_model.setProtocolEnabled(ResolverProtocol::DoH, m_dohToggle->isChecked());
     m_model.setProtocolEnabled(ResolverProtocol::DoT, m_dotToggle->isChecked());
+    const QList<ResolverEntry> runEntries = m_model.enabledEntries();
+    m_currentRunIds.clear();
+    for (const ResolverEntry& entry : runEntries) {
+        m_currentRunIds.insert(entry.id);
+    }
+
     m_model.resetRuntimeState();
     m_progress->setValue(0);
     m_resultsTab->setSummary(QStringLiteral("Benchmark running..."));
     appendLogLine(QStringLiteral("Starting benchmark."));
-    m_controller.start(m_model.enabledEntries(), m_sampleSpin->value(), loadDomains());
+    m_controller.start(runEntries, m_sampleSpin->value(), loadDomains());
 }
 
 void MainWindow::startBenchmarkForResolver(const ResolverEntry& entry)
@@ -368,6 +374,7 @@ void MainWindow::startBenchmarkForResolver(const ResolverEntry& entry)
     runEntry.enabled = true;
     m_model.setResolverEnabled(runEntry.id, true);
     m_model.resetRuntimeState(runEntry.id);
+    m_currentRunIds = {runEntry.id};
     m_progress->setValue(0);
     m_resultsTab->setSummary(QStringLiteral("Benchmark running for %1...").arg(runEntry.effectiveName()));
     appendLogLine(QStringLiteral("Starting single-resolver benchmark for %1.").arg(runEntry.effectiveName()));
@@ -482,6 +489,9 @@ void MainWindow::updateConclusions()
     QStringList unreliable;
 
     for (const ResolverEntry& entry : entries) {
+        if (!m_currentRunIds.isEmpty() && !m_currentRunIds.contains(entry.id)) {
+            continue;
+        }
         if (entry.protocol == ResolverProtocol::DoH && entry.enabled) {
             ++dohTotal;
         }
