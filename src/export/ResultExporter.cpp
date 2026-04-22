@@ -17,6 +17,14 @@ QString csvEscape(QString value)
     return value;
 }
 
+QString markdownEscape(QString value)
+{
+    value.replace(QLatin1Char('\\'), QStringLiteral("\\\\"));
+    value.replace(QLatin1Char('|'), QStringLiteral("\\|"));
+    value.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
+    return value;
+}
+
 QString stat(double value)
 {
     return QString::number(value, 'f', 1);
@@ -128,31 +136,25 @@ QString ResultExporter::toTextTable(const QList<ResolverEntry>& entries)
     const QHash<QString, int> ranks = ranksFor(entries);
     QString out;
     QTextStream stream(&out);
-    stream << QStringLiteral("%1  %2  %3  %4  %5  %6  %7  %8  %9  %10\n")
-                  .arg(QStringLiteral("#"), 3)
-                  .arg(QStringLiteral("Name"), -24)
-                  .arg(QStringLiteral("Address"), -28)
-                  .arg(QStringLiteral("Proto"), -5)
-                  .arg(QStringLiteral("Median"), 8)
-                  .arg(QStringLiteral("P90"), 8)
-                  .arg(QStringLiteral("Mean"), 8)
-                  .arg(QStringLiteral("Loss"), 7)
-                  .arg(QStringLiteral("DNSSEC"), -8)
-                  .arg(QStringLiteral("Verdict"), -14);
-    stream << QString(120, QLatin1Char('-')) << '\n';
+    stream << "| Rank | Name | Address | Proto | Median | P90 | Mean | Stddev | Min | Max | Loss | DNSSEC | Status | Verdict |\n";
+    stream << "|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n";
     for (const ResolverEntry& entry : entries) {
         const int rank = ranks.value(entry.id, 0);
-        stream << QStringLiteral("%1  %2  %3  %4  %5  %6  %7  %8  %9  %10\n")
-                      .arg(rank > 0 ? QString::number(rank) : QStringLiteral("-"), 3)
-                      .arg(entry.effectiveName().left(24), -24)
-                      .arg(entry.address.left(28), -28)
-                      .arg(protocolToString(entry.protocol), -5)
-                      .arg(stat(entry.stats.medianMs), 8)
-                      .arg(stat(entry.stats.p90Ms), 8)
-                      .arg(stat(entry.stats.meanMs), 8)
-                      .arg(stat(entry.stats.lossPercent), 7)
-                      .arg(dnssecFor(entry), -8)
-                      .arg(verdictFor(entry, rank), -14);
+        stream << "| "
+               << (rank > 0 ? QString::number(rank) : QStringLiteral("-")) << " | "
+               << markdownEscape(entry.effectiveName()) << " | "
+               << markdownEscape(entry.address) << " | "
+               << protocolToString(entry.protocol) << " | "
+               << stat(entry.stats.medianMs) << " | "
+               << stat(entry.stats.p90Ms) << " | "
+               << stat(entry.stats.meanMs) << " | "
+               << stat(entry.stats.stddevMs) << " | "
+               << stat(entry.stats.minMs) << " | "
+               << stat(entry.stats.maxMs) << " | "
+               << stat(entry.stats.lossPercent) << "% | "
+               << markdownEscape(dnssecFor(entry)) << " | "
+               << statusToString(entry.status) << " | "
+               << markdownEscape(verdictFor(entry, rank)) << " |\n";
     }
     return out;
 }

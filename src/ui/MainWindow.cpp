@@ -15,6 +15,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QHeaderView>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QMenuBar>
 #include <QMenu>
@@ -555,7 +556,7 @@ void MainWindow::stopBenchmark()
 
 void MainWindow::exportResults()
 {
-    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export Results"), QStringLiteral("dnsbench-results.csv"), QStringLiteral("CSV (*.csv);;Text Table (*.txt)"));
+    const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("Export Results"), QStringLiteral("dnsbench-results.csv"), QStringLiteral("CSV (*.csv);;Markdown Table (*.md *.txt)"));
     if (path.isEmpty()) {
         return;
     }
@@ -576,13 +577,24 @@ void MainWindow::cloneResults()
     dialog->setWindowTitle(QStringLiteral("Cloned Results"));
     dialog->resize(1000, 500);
 
-    auto* text = new QPlainTextEdit(ResultExporter::toTextTable(m_model.entries()), dialog);
+    const QString markdown = ResultExporter::toTextTable(m_model.entries());
+    auto* text = new QPlainTextEdit(markdown, dialog);
     text->setReadOnly(true);
     QFont monospace(QStringLiteral("monospace"));
     monospace.setStyleHint(QFont::Monospace);
     text->setFont(monospace);
 
+    auto* copyButton = new QPushButton(QStringLiteral("Copy Markdown"), dialog);
+    connect(copyButton, &QPushButton::clicked, dialog, [text]() {
+        QApplication::clipboard()->setText(text->toPlainText());
+    });
+
+    auto* controls = new QHBoxLayout();
+    controls->addStretch();
+    controls->addWidget(copyButton);
+
     auto* layout = new QVBoxLayout(dialog);
+    layout->addLayout(controls);
     layout->addWidget(text);
     dialog->show();
 }
