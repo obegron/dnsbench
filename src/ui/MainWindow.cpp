@@ -11,7 +11,6 @@
 #include <QCheckBox>
 #include <QDateTime>
 #include <QDialog>
-#include <QDialogButtonBox>
 #include <QFile>
 #include <QFileDialog>
 #include <QHeaderView>
@@ -23,7 +22,6 @@
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
-#include <QRadioButton>
 #include <QSettings>
 #include <QSet>
 #include <QSortFilterProxyModel>
@@ -355,62 +353,6 @@ void MainWindow::startBenchmark()
     if (m_controller.isRunning()) {
         QMessageBox::information(this, QStringLiteral("Benchmark Running"), QStringLiteral("Stop the current benchmark before starting another one."));
         return;
-    }
-
-    enum class Scope {
-        Enabled,
-        IPv4,
-        IPv6,
-        DoH,
-        DoT
-    };
-
-    QDialog scopeDialog(this);
-    scopeDialog.setWindowTitle(QStringLiteral("Benchmark Scope"));
-    auto* layout = new QVBoxLayout(&scopeDialog);
-    auto* enabledButton = new QRadioButton(QStringLiteral("Enabled protocols"), &scopeDialog);
-    auto* ipv4Button = new QRadioButton(QStringLiteral("IPv4 only"), &scopeDialog);
-    auto* ipv6Button = new QRadioButton(QStringLiteral("IPv6 only"), &scopeDialog);
-    auto* dohButton = new QRadioButton(QStringLiteral("DoH only"), &scopeDialog);
-    auto* dotButton = new QRadioButton(QStringLiteral("DoT only"), &scopeDialog);
-    enabledButton->setChecked(true);
-    for (QRadioButton* button : {enabledButton, ipv4Button, ipv6Button, dohButton, dotButton}) {
-        layout->addWidget(button);
-    }
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &scopeDialog);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &scopeDialog, &QDialog::accept);
-    connect(buttons, &QDialogButtonBox::rejected, &scopeDialog, &QDialog::reject);
-    if (scopeDialog.exec() != QDialog::Accepted) {
-        return;
-    }
-
-    Scope scope = Scope::Enabled;
-    if (ipv4Button->isChecked()) {
-        scope = Scope::IPv4;
-    } else if (ipv6Button->isChecked()) {
-        scope = Scope::IPv6;
-    } else if (dohButton->isChecked()) {
-        scope = Scope::DoH;
-    } else if (dotButton->isChecked()) {
-        scope = Scope::DoT;
-    }
-
-    auto setProtocolToggles = [this](bool ipv4, bool ipv6, bool doh, bool dot) {
-        m_ipv4Toggle->setChecked(ipv4);
-        m_ipv6Toggle->setChecked(ipv6);
-        m_dohToggle->setChecked(doh);
-        m_dotToggle->setChecked(dot);
-    };
-
-    if (scope == Scope::IPv4) {
-        setProtocolToggles(true, false, false, false);
-    } else if (scope == Scope::IPv6) {
-        setProtocolToggles(false, true, false, false);
-    } else if (scope == Scope::DoH) {
-        setProtocolToggles(false, false, true, false);
-    } else if (scope == Scope::DoT) {
-        setProtocolToggles(false, false, false, true);
     }
 
     m_model.setProtocolEnabled(ResolverProtocol::IPv4, m_ipv4Toggle->isChecked());
