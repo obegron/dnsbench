@@ -149,11 +149,20 @@ public:
         style->drawControl(QStyle::CE_ItemViewItem, &itemOption, painter, itemOption.widget);
 
         qreal maxRtt = 1.0;
+        int successCount = 0;
         for (const ResolverSamplePoint& sample : samples) {
             if (sample.success) {
+                ++successCount;
                 maxRtt = std::max(maxRtt, static_cast<qreal>(std::max<qint64>(1, sample.rttMs)));
             }
         }
+
+        const double median = index.sibling(index.row(), ResolverModel::MedianColumn).data(Qt::UserRole).toDouble();
+        const double p90 = index.sibling(index.row(), ResolverModel::P90Column).data(Qt::UserRole).toDouble();
+        const double loss = index.sibling(index.row(), ResolverModel::LossColumn).data(Qt::UserRole).toDouble();
+        const QColor quality = qualityColor(median, p90, loss);
+        const QColor mutedQuality(quality.red(), quality.green(), quality.blue(), 60);
+        const QColor lossColor = loss > 1.0 ? QColor(205, 67, 54) : QColor(183, 93, 52);
 
         const QRectF plot = option.rect.adjusted(6, 5, -6, -5);
         const qreal logMax = std::log10(std::max<qreal>(10.0, maxRtt));
@@ -164,13 +173,13 @@ public:
 
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing, true);
-        painter->setPen(QPen(QColor(54, 122, 201, 70), 1));
+        painter->setPen(QPen(mutedQuality, 1));
         painter->drawLine(plot.left(), plot.center().y(), plot.right(), plot.center().y());
 
         for (const ResolverSamplePoint& sample : samples) {
             const qreal x = plot.left() + (plot.width() * sample.sampleIndex / lastIndex);
             if (!sample.success) {
-                painter->setPen(QPen(QColor(205, 67, 54), 2));
+                painter->setPen(QPen(lossColor, 2));
                 painter->drawLine(QPointF(x, plot.bottom()), QPointF(x, plot.bottom() - std::max<qreal>(3.0, plot.height() * 0.22)));
                 continue;
             }
@@ -187,11 +196,41 @@ public:
         }
 
         if (hasPoint) {
-            painter->setPen(QPen(QColor(57, 154, 89), 1.6));
+            painter->setPen(QPen(quality, 1.8));
             painter->drawPath(path);
         }
 
+        if (successCount == 0) {
+            painter->setPen(QPen(lossColor, 1.4));
+            painter->drawLine(plot.bottomLeft(), plot.bottomRight());
+        }
+
         painter->restore();
+    }
+
+private:
+    static QColor blend(const QColor& from, const QColor& to, double t)
+    {
+        const double clamped = std::clamp(t, 0.0, 1.0);
+        return QColor(
+            static_cast<int>(from.red() + (to.red() - from.red()) * clamped),
+            static_cast<int>(from.green() + (to.green() - from.green()) * clamped),
+            static_cast<int>(from.blue() + (to.blue() - from.blue()) * clamped));
+    }
+
+    static QColor qualityColor(double medianMs, double p90Ms, double lossPercent)
+    {
+        const QColor green(57, 154, 89);
+        const QColor amber(210, 154, 45);
+        const QColor red(196, 69, 54);
+
+        const double latencyScore = std::max(medianMs / 45.0, p90Ms / 120.0);
+        const double lossScore = lossPercent / 5.0;
+        const double score = std::max(latencyScore, lossScore);
+        if (score <= 1.0) {
+            return blend(green, amber, score);
+        }
+        return blend(amber, red, (score - 1.0) / 1.2);
     }
 };
 
