@@ -20,5 +20,6 @@ public:
     virtual QString id() const = 0;
     virtual void setTimeoutMs(int timeoutMs) = 0;
     virtual QString lastErrorString() const { return {}; }
+    virtual bool lastAuthenticatedDataBit() const { return false; }
     virtual void cancel() {}
 };

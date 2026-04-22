@@ -32,6 +32,7 @@ struct ResolverEntry {
     bool systemResolver = false;
     bool builtInResolver = false;
     ResolverStatus status = ResolverStatus::Idle;
+    bool dnssecAuthenticatedDataSeen = false;
     Statistics stats;
 
     QString effectiveName() const;

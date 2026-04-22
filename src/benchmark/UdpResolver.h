@@ -14,8 +14,10 @@ public:
     void query(const QString& domain, QueryCallback callback) override;
     QString id() const override;
     void setTimeoutMs(int timeoutMs) override;
+    bool lastAuthenticatedDataBit() const override;
 
 private:
     ResolverEntry m_entry;
     int m_timeoutMs = 5000;
+    bool m_lastAuthenticatedDataBit = false;
 };

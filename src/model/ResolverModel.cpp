@@ -153,8 +153,13 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
         return QStringLiteral("Pin keeps this resolver at the top while sorting. It does not control benchmark selection.");
     }
 
-    if (role == Qt::ForegroundRole && (!entry.enabled || entry.status == ResolverStatus::Disabled)) {
-        return QBrush(QColor(130, 130, 130));
+    if (role == Qt::ForegroundRole) {
+        if (!entry.enabled || entry.status == ResolverStatus::Disabled) {
+            return QBrush(QColor(130, 130, 130));
+        }
+        if (entry.status == ResolverStatus::Finished && entry.dnssecAuthenticatedDataSeen) {
+            return QBrush(QColor(76, 175, 103));
+        }
     }
 
     if (role == Qt::UserRole) {
@@ -175,6 +180,8 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
             return entry.stats.maxMs;
         case LossColumn:
             return entry.stats.lossPercent;
+        case DnssecColumn:
+            return entry.dnssecAuthenticatedDataSeen ? 1 : 0;
         case StatusColumn:
             return static_cast<int>(entry.enabled ? entry.status : ResolverStatus::Disabled);
         default:
@@ -205,6 +212,11 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
     case MaxColumn:
     case LossColumn:
         return statData(entry.stats, column, role);
+    case DnssecColumn:
+        if (entry.status == ResolverStatus::Finished && entry.stats.hasSamples()) {
+            return entry.dnssecAuthenticatedDataSeen ? QStringLiteral("AD seen") : QStringLiteral("No AD");
+        }
+        return QStringLiteral("-");
     case StatusColumn:
         return resolverVerdict(entry);
     case ColumnCount:
@@ -243,6 +255,8 @@ QVariant ResolverModel::headerData(int section, Qt::Orientation orientation, int
         return QStringLiteral("Max");
     case LossColumn:
         return QStringLiteral("Loss (%)");
+    case DnssecColumn:
+        return QStringLiteral("DNSSEC");
     case StatusColumn:
         return QStringLiteral("Status");
     case ColumnCount:
@@ -349,7 +363,7 @@ void ResolverModel::removeRowsByIndexes(const QModelIndexList& indexes)
     }
 }
 
-void ResolverModel::updateStats(const QString& id, const Statistics& stats, ResolverStatus status)
+void ResolverModel::updateStats(const QString& id, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen)
 {
     const int row = rowForId(id);
     if (row < 0) {
@@ -358,7 +372,8 @@ void ResolverModel::updateStats(const QString& id, const Statistics& stats, Reso
 
     m_entries[row].stats = stats;
     m_entries[row].status = status;
-    emit dataChanged(index(row, MedianColumn), index(row, StatusColumn));
+    m_entries[row].dnssecAuthenticatedDataSeen = dnssecAuthenticatedDataSeen;
+    emit dataChanged(index(row, 0), index(row, StatusColumn));
     emit resolverChanged(m_entries[row]);
 }
 
@@ -407,6 +422,7 @@ void ResolverModel::resetRuntimeState()
     for (ResolverEntry& entry : m_entries) {
         entry.stats = {};
         entry.status = ResolverStatus::Idle;
+        entry.dnssecAuthenticatedDataSeen = false;
     }
     emit dataChanged(index(0, 0), index(m_entries.size() - 1, ColumnCount - 1));
 }
@@ -420,7 +436,8 @@ void ResolverModel::resetRuntimeState(const QString& id)
 
     m_entries[row].stats = {};
     m_entries[row].status = ResolverStatus::Idle;
-    emit dataChanged(index(row, MedianColumn), index(row, StatusColumn));
+    m_entries[row].dnssecAuthenticatedDataSeen = false;
+    emit dataChanged(index(row, 0), index(row, StatusColumn));
     emit resolverChanged(m_entries[row]);
 }
 

@@ -29,6 +29,17 @@ private slots:
         QVERIFY(DnsPacket::isValidResponse(response, 0x1234));
         QVERIFY(!DnsPacket::isValidResponse(response, 0x4321));
     }
+
+    void detectsAuthenticatedDataBit()
+    {
+        QByteArray response(12, '\0');
+        qToBigEndian<quint16>(0x81a0, reinterpret_cast<uchar*>(response.data() + 2));
+
+        QVERIFY(DnsPacket::authenticatedDataBit(response));
+
+        qToBigEndian<quint16>(0x8180, reinterpret_cast<uchar*>(response.data() + 2));
+        QVERIFY(!DnsPacket::authenticatedDataBit(response));
+    }
 };
 
 QTEST_GUILESS_MAIN(DnsPacketTest)

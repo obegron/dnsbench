@@ -38,6 +38,7 @@ DotResolver::DotResolver(const ResolverEntry& entry, int timeoutMs, QObject* par
         }
         const QByteArray response = m_buffer.mid(2, length);
         const bool valid = DnsPacket::isValidResponse(response, m_transactionId);
+        m_lastAuthenticatedDataBit = valid && DnsPacket::authenticatedDataBit(response);
         finish(valid ? m_elapsed.elapsed() : 0, valid);
     });
 }
@@ -53,6 +54,11 @@ void DotResolver::setTimeoutMs(int timeoutMs)
     m_timeout.setInterval(m_timeoutMs);
 }
 
+bool DotResolver::lastAuthenticatedDataBit() const
+{
+    return m_lastAuthenticatedDataBit;
+}
+
 void DotResolver::query(const QString& domain, QueryCallback callback)
 {
     if (m_queryInFlight) {
@@ -60,6 +66,7 @@ void DotResolver::query(const QString& domain, QueryCallback callback)
         return;
     }
 
+    m_lastAuthenticatedDataBit = false;
     m_transactionId = static_cast<quint16>(QRandomGenerator::global()->bounded(1, 0xffff));
     const QByteArray dnsPacket = DnsPacket::buildQuery(domain, m_transactionId, 1);
     if (dnsPacket.isEmpty()) {

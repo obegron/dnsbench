@@ -16,11 +16,13 @@ public:
     QString id() const override;
     void setTimeoutMs(int timeoutMs) override;
     QString lastErrorString() const override;
+    bool lastAuthenticatedDataBit() const override;
 
 private:
     ResolverEntry m_entry;
     int m_timeoutMs = 5000;
     QString m_lastError;
+    bool m_lastAuthenticatedDataBit = false;
     QNetworkAccessManager m_network;
 
     QUrl endpoint() const;

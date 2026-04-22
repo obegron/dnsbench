@@ -19,14 +19,14 @@ class BenchmarkController : public QObject {
 public:
     explicit BenchmarkController(QObject* parent = nullptr);
 
-    void start(const QList<ResolverEntry>& resolvers, int sampleCount, QStringList domains);
+    void start(const QList<ResolverEntry>& resolvers, int sampleCount, int interQueryDelayMs, QStringList domains);
     void stop();
     bool isRunning() const;
     void setMaxConcurrentResolvers(int maxConcurrentResolvers);
 
 signals:
     void progressUpdated(int completed, int total, qint64 elapsedMs);
-    void resolverFinished(const QString& resolverId, const Statistics& stats, ResolverStatus status);
+    void resolverFinished(const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen);
     void resolverStatusChanged(const QString& resolverId, ResolverStatus status);
     void logLine(const QString& line);
     void benchmarkFinished();
@@ -37,6 +37,7 @@ private:
     QList<ResolverEntry> m_resolvers;
     QStringList m_domains;
     int m_sampleCount = 250;
+    int m_interQueryDelayMs = 20;
     int m_completed = 0;
     int m_total = 0;
     int m_finishedResolvers = 0;

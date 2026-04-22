@@ -27,8 +27,14 @@ void UdpResolver::setTimeoutMs(int timeoutMs)
     m_timeoutMs = timeoutMs;
 }
 
+bool UdpResolver::lastAuthenticatedDataBit() const
+{
+    return m_lastAuthenticatedDataBit;
+}
+
 void UdpResolver::query(const QString& domain, QueryCallback callback)
 {
+    m_lastAuthenticatedDataBit = false;
     auto* socket = new QUdpSocket(this);
     auto* timeout = new QTimer(socket);
     timeout->setSingleShot(true);
@@ -63,12 +69,13 @@ void UdpResolver::query(const QString& domain, QueryCallback callback)
         finish(0, false);
     });
 
-    QObject::connect(socket, &QUdpSocket::readyRead, socket, [socket, transactionId, elapsed, finish]() mutable {
+    QObject::connect(socket, &QUdpSocket::readyRead, socket, [this, socket, transactionId, elapsed, finish]() mutable {
         while (socket->hasPendingDatagrams()) {
             QByteArray datagram;
             datagram.resize(static_cast<int>(socket->pendingDatagramSize()));
             socket->readDatagram(datagram.data(), datagram.size());
             if (DnsPacket::isValidResponse(datagram, transactionId)) {
+                m_lastAuthenticatedDataBit = DnsPacket::authenticatedDataBit(datagram);
                 finish(elapsed->elapsed(), true);
                 return;
             }

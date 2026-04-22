@@ -72,6 +72,14 @@ QString verdictFor(const ResolverEntry& entry, int rank)
     return resolverVerdict(entry);
 }
 
+QString dnssecFor(const ResolverEntry& entry)
+{
+    if (entry.status == ResolverStatus::Finished && entry.stats.hasSamples()) {
+        return entry.dnssecAuthenticatedDataSeen ? QStringLiteral("AD seen") : QStringLiteral("No AD");
+    }
+    return QStringLiteral("-");
+}
+
 bool saveText(const QString& path, const QString& content, QString* error)
 {
     QFile file(path);
@@ -94,7 +102,7 @@ QString ResultExporter::toCsv(const QList<ResolverEntry>& entries)
     const QHash<QString, int> ranks = ranksFor(entries);
     QString out;
     QTextStream stream(&out);
-    stream << "Rank,Display Name,Address,Protocol,Median (ms),P90 (ms),Mean (ms),Stddev,Min,Max,Loss (%),Status,Verdict\n";
+    stream << "Rank,Display Name,Address,Protocol,Median (ms),P90 (ms),Mean (ms),Stddev,Min,Max,Loss (%),DNSSEC,Status,Verdict\n";
     for (const ResolverEntry& entry : entries) {
         const int rank = ranks.value(entry.id, 0);
         stream << (rank > 0 ? QString::number(rank) : QString()) << ','
@@ -108,6 +116,7 @@ QString ResultExporter::toCsv(const QList<ResolverEntry>& entries)
                << stat(entry.stats.minMs) << ','
                << stat(entry.stats.maxMs) << ','
                << stat(entry.stats.lossPercent) << ','
+               << csvEscape(dnssecFor(entry)) << ','
                << statusToString(entry.status) << ','
                << csvEscape(verdictFor(entry, rank)) << '\n';
     }
@@ -119,7 +128,7 @@ QString ResultExporter::toTextTable(const QList<ResolverEntry>& entries)
     const QHash<QString, int> ranks = ranksFor(entries);
     QString out;
     QTextStream stream(&out);
-    stream << QStringLiteral("%1  %2  %3  %4  %5  %6  %7  %8  %9\n")
+    stream << QStringLiteral("%1  %2  %3  %4  %5  %6  %7  %8  %9  %10\n")
                   .arg(QStringLiteral("#"), 3)
                   .arg(QStringLiteral("Name"), -24)
                   .arg(QStringLiteral("Address"), -28)
@@ -128,11 +137,12 @@ QString ResultExporter::toTextTable(const QList<ResolverEntry>& entries)
                   .arg(QStringLiteral("P90"), 8)
                   .arg(QStringLiteral("Mean"), 8)
                   .arg(QStringLiteral("Loss"), 7)
+                  .arg(QStringLiteral("DNSSEC"), -8)
                   .arg(QStringLiteral("Verdict"), -14);
     stream << QString(120, QLatin1Char('-')) << '\n';
     for (const ResolverEntry& entry : entries) {
         const int rank = ranks.value(entry.id, 0);
-        stream << QStringLiteral("%1  %2  %3  %4  %5  %6  %7  %8  %9\n")
+        stream << QStringLiteral("%1  %2  %3  %4  %5  %6  %7  %8  %9  %10\n")
                       .arg(rank > 0 ? QString::number(rank) : QStringLiteral("-"), 3)
                       .arg(entry.effectiveName().left(24), -24)
                       .arg(entry.address.left(28), -28)
@@ -141,6 +151,7 @@ QString ResultExporter::toTextTable(const QList<ResolverEntry>& entries)
                       .arg(stat(entry.stats.p90Ms), 8)
                       .arg(stat(entry.stats.meanMs), 8)
                       .arg(stat(entry.stats.lossPercent), 7)
+                      .arg(dnssecFor(entry), -8)
                       .arg(verdictFor(entry, rank), -14);
     }
     return out;

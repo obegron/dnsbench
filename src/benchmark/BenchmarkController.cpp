@@ -10,6 +10,7 @@
 #include <QPointer>
 #include <QRandomGenerator>
 #include <QRunnable>
+#include <QThread>
 
 #include <algorithm>
 #include <memory>
@@ -58,11 +59,13 @@ public:
         QPointer<BenchmarkController> controller,
         ResolverEntry entry,
         int sampleCount,
+        int interQueryDelayMs,
         QStringList domains,
         std::shared_ptr<std::atomic_bool> cancelled)
         : m_controller(std::move(controller))
         , m_entry(std::move(entry))
         , m_sampleCount(sampleCount)
+        , m_interQueryDelayMs(std::max(0, interQueryDelayMs))
         , m_domains(std::move(domains))
         , m_cancelled(std::move(cancelled))
     {
@@ -100,7 +103,7 @@ public:
         if (successes < warmupSuccessThreshold) {
             const Statistics stats = Statistics::fromSamples({}, m_sampleCount);
             postStatus(ResolverStatus::Sidelined);
-            postResolverFinished(stats, ResolverStatus::Sidelined);
+            postResolverFinished(stats, ResolverStatus::Sidelined, false);
             QString message = QStringLiteral("Sidelined %1: %2/%3 warm-up responses.")
                     .arg(m_entry.effectiveName())
                     .arg(successes)
@@ -121,6 +124,7 @@ public:
 
         QVector<qint64> samples;
         samples.reserve(m_sampleCount);
+        bool dnssecAuthenticatedDataSeen = false;
         resolver->setTimeoutMs(fullQueryTimeoutMs);
 
         for (int i = 0; i < m_sampleCount && !isCancelled(); ++i) {
@@ -132,6 +136,7 @@ public:
             const bool success = queryBlocking(resolver.get(), domain, &rttMs, &error);
             if (success) {
                 samples.push_back(rttMs);
+                dnssecAuthenticatedDataSeen = dnssecAuthenticatedDataSeen || resolver->lastAuthenticatedDataBit();
                 postLog(QStringLiteral("Response %1 via %2 in %3 ms.")
                         .arg(domain, m_entry.effectiveName())
                         .arg(rttMs));
@@ -141,11 +146,14 @@ public:
                     : QStringLiteral("Failure for %1 via %2: %3.").arg(domain, m_entry.effectiveName(), error));
             }
             postProgress(1);
+            if (i + 1 < m_sampleCount) {
+                sleepBetweenQueries();
+            }
         }
 
         if (!isCancelled()) {
             const Statistics stats = Statistics::fromSamples(samples, m_sampleCount);
-            postResolverFinished(stats, ResolverStatus::Finished);
+            postResolverFinished(stats, ResolverStatus::Finished, dnssecAuthenticatedDataSeen);
             postLog(QStringLiteral("Finished %1: median %2 ms, loss %3%.")
                     .arg(m_entry.effectiveName())
                     .arg(stats.medianMs, 0, 'f', 1)
@@ -159,6 +167,7 @@ private:
     QPointer<BenchmarkController> m_controller;
     ResolverEntry m_entry;
     int m_sampleCount = 0;
+    int m_interQueryDelayMs = 20;
     QStringList m_domains;
     std::shared_ptr<std::atomic_bool> m_cancelled;
 
@@ -203,6 +212,16 @@ private:
         return !isCancelled() && success;
     }
 
+    void sleepBetweenQueries()
+    {
+        int remainingMs = m_interQueryDelayMs;
+        while (remainingMs > 0 && !isCancelled()) {
+            const int sliceMs = std::min(remainingMs, 50);
+            QThread::msleep(static_cast<unsigned long>(sliceMs));
+            remainingMs -= sliceMs;
+        }
+    }
+
     void postStatus(ResolverStatus status)
     {
         post([id = m_entry.id, status](BenchmarkController* controller) {
@@ -228,11 +247,11 @@ private:
         });
     }
 
-    void postResolverFinished(Statistics stats, ResolverStatus status)
+    void postResolverFinished(Statistics stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen)
     {
-        post([id = m_entry.id, stats, status](BenchmarkController* controller) {
+        post([id = m_entry.id, stats, status, dnssecAuthenticatedDataSeen](BenchmarkController* controller) {
             if (controller->m_running) {
-                emit controller->resolverFinished(id, stats, status);
+                emit controller->resolverFinished(id, stats, status, dnssecAuthenticatedDataSeen);
             }
         });
     }
@@ -264,12 +283,13 @@ BenchmarkController::BenchmarkController(QObject* parent)
     m_threadPool.setMaxThreadCount(20);
 }
 
-void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampleCount, QStringList domains)
+void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampleCount, int interQueryDelayMs, QStringList domains)
 {
     stop();
 
     m_resolvers = resolvers;
     m_sampleCount = std::max(1, sampleCount);
+    m_interQueryDelayMs = std::max(0, interQueryDelayMs);
     m_domains = std::move(domains);
     if (m_domains.isEmpty()) {
         m_domains = {QStringLiteral("example.com"), QStringLiteral("qt.io"), QStringLiteral("cloudflare.com")};
@@ -286,6 +306,7 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
 
     emit progressUpdated(0, m_total, 0);
     emit logLine(QStringLiteral("Running up to %1 resolver(s) in parallel.").arg(m_threadPool.maxThreadCount()));
+    emit logLine(QStringLiteral("Inter-query delay: %1 ms.").arg(m_interQueryDelayMs));
 
     if (m_resolvers.isEmpty()) {
         finishAll();
@@ -293,7 +314,7 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
     }
 
     for (const ResolverEntry& entry : std::as_const(m_resolvers)) {
-        m_threadPool.start(new ResolverBenchmarkTask(QPointer<BenchmarkController>(this), entry, m_sampleCount, m_domains, m_cancelled));
+        m_threadPool.start(new ResolverBenchmarkTask(QPointer<BenchmarkController>(this), entry, m_sampleCount, m_interQueryDelayMs, m_domains, m_cancelled));
     }
 }
 

@@ -11,6 +11,7 @@
 #include <QCheckBox>
 #include <QDateTime>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QFile>
 #include <QFileDialog>
 #include <QHeaderView>
@@ -22,6 +23,7 @@
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QSettings>
 #include <QSet>
 #include <QSortFilterProxyModel>
@@ -274,6 +276,15 @@ void MainWindow::buildUi()
     m_sampleSpin->setValue(250);
     toolbar->addWidget(m_sampleSpin);
 
+    toolbar->addSeparator();
+    toolbar->addWidget(new QLabel(QStringLiteral("Delay"), this));
+    m_delaySpin = new QSpinBox(this);
+    m_delaySpin->setRange(0, 5000);
+    m_delaySpin->setValue(20);
+    m_delaySpin->setSuffix(QStringLiteral(" ms"));
+    m_delaySpin->setToolTip(QStringLiteral("Delay between queries sent by each resolver."));
+    toolbar->addWidget(m_delaySpin);
+
     m_progress = new QProgressBar(this);
     m_progress->setRange(0, 100);
     m_progress->setValue(0);
@@ -287,8 +298,8 @@ void MainWindow::buildUi()
 void MainWindow::connectController()
 {
     connect(&m_controller, &BenchmarkController::progressUpdated, this, &MainWindow::updateProgress);
-    connect(&m_controller, &BenchmarkController::resolverFinished, this, [this](const QString& resolverId, const Statistics& stats, ResolverStatus status) {
-        m_model.updateStats(resolverId, stats, status);
+    connect(&m_controller, &BenchmarkController::resolverFinished, this, [this](const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen) {
+        m_model.updateStats(resolverId, stats, status, dnssecAuthenticatedDataSeen);
     });
     connect(&m_controller, &BenchmarkController::resolverStatusChanged, &m_model, &ResolverModel::updateStatus);
     connect(&m_controller, &BenchmarkController::logLine, this, &MainWindow::appendLogLine);
@@ -346,11 +357,71 @@ void MainWindow::startBenchmark()
         return;
     }
 
+    enum class Scope {
+        Enabled,
+        IPv4,
+        IPv6,
+        DoH,
+        DoT
+    };
+
+    QDialog scopeDialog(this);
+    scopeDialog.setWindowTitle(QStringLiteral("Benchmark Scope"));
+    auto* layout = new QVBoxLayout(&scopeDialog);
+    auto* enabledButton = new QRadioButton(QStringLiteral("Enabled protocols"), &scopeDialog);
+    auto* ipv4Button = new QRadioButton(QStringLiteral("IPv4 only"), &scopeDialog);
+    auto* ipv6Button = new QRadioButton(QStringLiteral("IPv6 only"), &scopeDialog);
+    auto* dohButton = new QRadioButton(QStringLiteral("DoH only"), &scopeDialog);
+    auto* dotButton = new QRadioButton(QStringLiteral("DoT only"), &scopeDialog);
+    enabledButton->setChecked(true);
+    for (QRadioButton* button : {enabledButton, ipv4Button, ipv6Button, dohButton, dotButton}) {
+        layout->addWidget(button);
+    }
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &scopeDialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &scopeDialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &scopeDialog, &QDialog::reject);
+    if (scopeDialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    Scope scope = Scope::Enabled;
+    if (ipv4Button->isChecked()) {
+        scope = Scope::IPv4;
+    } else if (ipv6Button->isChecked()) {
+        scope = Scope::IPv6;
+    } else if (dohButton->isChecked()) {
+        scope = Scope::DoH;
+    } else if (dotButton->isChecked()) {
+        scope = Scope::DoT;
+    }
+
+    auto setProtocolToggles = [this](bool ipv4, bool ipv6, bool doh, bool dot) {
+        m_ipv4Toggle->setChecked(ipv4);
+        m_ipv6Toggle->setChecked(ipv6);
+        m_dohToggle->setChecked(doh);
+        m_dotToggle->setChecked(dot);
+    };
+
+    if (scope == Scope::IPv4) {
+        setProtocolToggles(true, false, false, false);
+    } else if (scope == Scope::IPv6) {
+        setProtocolToggles(false, true, false, false);
+    } else if (scope == Scope::DoH) {
+        setProtocolToggles(false, false, true, false);
+    } else if (scope == Scope::DoT) {
+        setProtocolToggles(false, false, false, true);
+    }
+
     m_model.setProtocolEnabled(ResolverProtocol::IPv4, m_ipv4Toggle->isChecked());
     m_model.setProtocolEnabled(ResolverProtocol::IPv6, m_ipv6Toggle->isChecked());
     m_model.setProtocolEnabled(ResolverProtocol::DoH, m_dohToggle->isChecked());
     m_model.setProtocolEnabled(ResolverProtocol::DoT, m_dotToggle->isChecked());
     const QList<ResolverEntry> runEntries = m_model.enabledEntries();
+    if (runEntries.isEmpty()) {
+        QMessageBox::information(this, QStringLiteral("No Resolvers"), QStringLiteral("No resolvers are enabled for this benchmark."));
+        return;
+    }
     m_currentRunIds.clear();
     for (const ResolverEntry& entry : runEntries) {
         m_currentRunIds.insert(entry.id);
@@ -360,7 +431,7 @@ void MainWindow::startBenchmark()
     m_progress->setValue(0);
     m_resultsTab->setSummary(QStringLiteral("Benchmark running..."));
     appendLogLine(QStringLiteral("Starting benchmark."));
-    m_controller.start(runEntries, m_sampleSpin->value(), loadDomains());
+    m_controller.start(runEntries, m_sampleSpin->value(), m_delaySpin->value(), loadDomains());
 }
 
 void MainWindow::startBenchmarkForResolver(const ResolverEntry& entry)
@@ -378,7 +449,7 @@ void MainWindow::startBenchmarkForResolver(const ResolverEntry& entry)
     m_progress->setValue(0);
     m_resultsTab->setSummary(QStringLiteral("Benchmark running for %1...").arg(runEntry.effectiveName()));
     appendLogLine(QStringLiteral("Starting single-resolver benchmark for %1.").arg(runEntry.effectiveName()));
-    m_controller.start({runEntry}, m_sampleSpin->value(), loadDomains());
+    m_controller.start({runEntry}, m_sampleSpin->value(), m_delaySpin->value(), loadDomains());
 }
 
 void MainWindow::stopBenchmark()
@@ -487,6 +558,7 @@ void MainWindow::updateConclusions()
     int dohTotal = 0;
     int dohFinished = 0;
     QStringList unreliable;
+    QStringList dnssecAdSeen;
 
     for (const ResolverEntry& entry : entries) {
         if (!m_currentRunIds.isEmpty() && !m_currentRunIds.contains(entry.id)) {
@@ -524,6 +596,9 @@ void MainWindow::updateConclusions()
         if (entry.stats.lossPercent > 1.0) {
             unreliable.push_back(QStringLiteral("%1 (%2% loss)").arg(entry.effectiveName()).arg(entry.stats.lossPercent, 0, 'f', 1));
         }
+        if (entry.dnssecAuthenticatedDataSeen) {
+            dnssecAdSeen.push_back(entry.effectiveName());
+        }
     }
 
     std::sort(finished.begin(), finished.end(), resultLessThan);
@@ -545,6 +620,9 @@ void MainWindow::updateConclusions()
     }
     if (!unreliable.isEmpty()) {
         lines << QStringLiteral("Resolvers with >1% loss: %1.").arg(unreliable.join(QStringLiteral(", ")));
+    }
+    if (!dnssecAdSeen.isEmpty()) {
+        lines << QStringLiteral("DNSSEC AD bit observed from: %1.").arg(dnssecAdSeen.join(QStringLiteral(", ")));
     }
     if (hasSystem && system.status == ResolverStatus::Finished && !reliableFinished.isEmpty()) {
         const ResolverEntry& recommended = reliableFinished.first();
@@ -615,6 +693,7 @@ void MainWindow::loadSettings()
     QSettings settings;
     restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
     m_sampleSpin->setValue(settings.value(QStringLiteral("benchmark/sampleCount"), 250).toInt());
+    m_delaySpin->setValue(settings.value(QStringLiteral("benchmark/interQueryDelayMs"), 20).toInt());
     m_ipv4Toggle->setChecked(settings.value(QStringLiteral("protocols/ipv4"), true).toBool());
     m_ipv6Toggle->setChecked(settings.value(QStringLiteral("protocols/ipv6"), true).toBool());
     m_dohToggle->setChecked(settings.value(QStringLiteral("protocols/doh"), true).toBool());
@@ -647,6 +726,7 @@ void MainWindow::saveSettings()
     QSettings settings;
     settings.setValue(QStringLiteral("window/geometry"), saveGeometry());
     settings.setValue(QStringLiteral("benchmark/sampleCount"), m_sampleSpin->value());
+    settings.setValue(QStringLiteral("benchmark/interQueryDelayMs"), m_delaySpin->value());
     settings.setValue(QStringLiteral("protocols/ipv4"), m_ipv4Toggle->isChecked());
     settings.setValue(QStringLiteral("protocols/ipv6"), m_ipv6Toggle->isChecked());
     settings.setValue(QStringLiteral("protocols/doh"), m_dohToggle->isChecked());

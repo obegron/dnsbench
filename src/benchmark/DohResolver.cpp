@@ -69,6 +69,11 @@ QString DohResolver::lastErrorString() const
     return m_lastError;
 }
 
+bool DohResolver::lastAuthenticatedDataBit() const
+{
+    return m_lastAuthenticatedDataBit;
+}
+
 QUrl DohResolver::endpoint() const
 {
     QUrl url(m_entry.address);
@@ -81,6 +86,7 @@ QUrl DohResolver::endpoint() const
 void DohResolver::query(const QString& domain, QueryCallback callback)
 {
     m_lastError.clear();
+    m_lastAuthenticatedDataBit = false;
     const quint16 transactionId = 0;
     const QByteArray queryPacket = DnsPacket::buildQuery(domain, transactionId, 1);
     const QUrl url = endpoint();
@@ -127,6 +133,7 @@ void DohResolver::query(const QString& domain, QueryCallback callback)
         } else if (!DnsPacket::isValidResponse(payload, transactionId)) {
             m_lastError = QStringLiteral("invalid DNS message response from %1: %2 bytes").arg(reply->url().toString()).arg(payload.size());
         } else {
+            m_lastAuthenticatedDataBit = DnsPacket::authenticatedDataBit(payload);
             success = true;
         }
         const qint64 rtt = success ? elapsed->elapsed() : 0;
