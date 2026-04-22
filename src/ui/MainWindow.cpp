@@ -4,6 +4,7 @@
 #include "export/ResultExporter.h"
 #include "ui/AddResolverDialog.h"
 #include "ui/ResultsTab.h"
+#include "ui/TimelineChart.h"
 
 #include <QAction>
 #include <QApplication>
@@ -19,6 +20,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
@@ -39,6 +41,7 @@
 #include <QWidget>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <memory>
 
@@ -123,6 +126,71 @@ public:
         painter->setPen(option.palette.text().color());
         painter->drawText(option.rect.adjusted(8, 0, -8, 0), Qt::AlignVCenter | Qt::AlignRight,
             QStringLiteral("%1 ms").arg(median, 0, 'f', 1));
+        painter->restore();
+    }
+};
+
+class TimelineSparklineDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override
+    {
+        const QVector<ResolverSamplePoint> samples = index.data(Qt::UserRole).value<QVector<ResolverSamplePoint>>();
+        if (samples.isEmpty()) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+
+        QStyleOptionViewItem itemOption(option);
+        initStyleOption(&itemOption, index);
+        itemOption.text.clear();
+        QStyle* style = itemOption.widget ? itemOption.widget->style() : QApplication::style();
+        style->drawControl(QStyle::CE_ItemViewItem, &itemOption, painter, itemOption.widget);
+
+        qreal maxRtt = 1.0;
+        for (const ResolverSamplePoint& sample : samples) {
+            if (sample.success) {
+                maxRtt = std::max(maxRtt, static_cast<qreal>(std::max<qint64>(1, sample.rttMs)));
+            }
+        }
+
+        const QRectF plot = option.rect.adjusted(6, 5, -6, -5);
+        const qreal logMax = std::log10(std::max<qreal>(10.0, maxRtt));
+        const int lastIndex = std::max(1, samples.last().sampleIndex);
+
+        QPainterPath path;
+        bool hasPoint = false;
+
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        painter->setPen(QPen(QColor(54, 122, 201, 70), 1));
+        painter->drawLine(plot.left(), plot.center().y(), plot.right(), plot.center().y());
+
+        for (const ResolverSamplePoint& sample : samples) {
+            const qreal x = plot.left() + (plot.width() * sample.sampleIndex / lastIndex);
+            if (!sample.success) {
+                painter->setPen(QPen(QColor(205, 67, 54), 2));
+                painter->drawLine(QPointF(x, plot.bottom()), QPointF(x, plot.bottom() - std::max<qreal>(3.0, plot.height() * 0.22)));
+                continue;
+            }
+
+            const qreal logValue = std::log10(std::max<qreal>(1.0, sample.rttMs));
+            const qreal normalized = logMax <= 0.0 ? 0.0 : std::clamp(logValue / logMax, 0.0, 1.0);
+            const qreal y = plot.bottom() - normalized * plot.height();
+            if (!hasPoint) {
+                path.moveTo(x, y);
+                hasPoint = true;
+            } else {
+                path.lineTo(x, y);
+            }
+        }
+
+        if (hasPoint) {
+            painter->setPen(QPen(QColor(57, 154, 89), 1.6));
+            painter->drawPath(path);
+        }
+
         painter->restore();
     }
 };
@@ -238,12 +306,16 @@ void MainWindow::buildUi()
     m_table->sortByColumn(ResolverModel::MedianColumn, Qt::AscendingOrder);
     m_table->horizontalHeader()->setStretchLastSection(true);
     m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    m_table->horizontalHeader()->setSectionResizeMode(ResolverModel::TimelineColumn, QHeaderView::Fixed);
+    m_table->setColumnWidth(ResolverModel::TimelineColumn, 150);
     m_table->verticalHeader()->setVisible(false);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setAlternatingRowColors(true);
     m_table->setItemDelegateForColumn(ResolverModel::MedianColumn, new LatencyBarDelegate(m_table));
+    m_table->setItemDelegateForColumn(ResolverModel::TimelineColumn, new TimelineSparklineDelegate(m_table));
     m_table->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_table, &QTableView::customContextMenuRequested, this, &MainWindow::showResolverContextMenu);
+    connect(m_table, &QTableView::clicked, this, &MainWindow::openTimelineForIndex);
 
     m_resultsTab = new ResultsTab(this);
     m_log = new QPlainTextEdit(this);
@@ -522,6 +594,20 @@ void MainWindow::showResolverContextMenu(const QPoint& position)
         QApplication::clipboard()->setText(cellText);
     });
     menu.exec(m_table->viewport()->mapToGlobal(position));
+}
+
+void MainWindow::openTimelineForIndex(const QModelIndex& proxyIndex)
+{
+    if (!proxyIndex.isValid() || proxyIndex.column() != ResolverModel::TimelineColumn) {
+        return;
+    }
+
+    const QModelIndex sourceIndex = m_proxy->mapToSource(proxyIndex);
+    const QList<ResolverEntry> entries = m_model.entries();
+    if (sourceIndex.row() < 0 || sourceIndex.row() >= entries.size()) {
+        return;
+    }
+    openTimelineChartDialog(this, entries.at(sourceIndex.row()));
 }
 
 void MainWindow::appendLogLine(const QString& line)

@@ -197,6 +197,8 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
             return entry.stats.maxMs;
         case LossColumn:
             return entry.stats.lossPercent;
+        case TimelineColumn:
+            return QVariant::fromValue(entry.samples);
         case DnssecColumn:
             return entry.dnssecAuthenticatedDataSeen ? 1 : 0;
         case StatusColumn:
@@ -229,6 +231,8 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
     case MaxColumn:
     case LossColumn:
         return statData(entry.stats, column, role);
+    case TimelineColumn:
+        return QString();
     case DnssecColumn:
         if (entry.status == ResolverStatus::Finished && entry.stats.hasSamples()) {
             return entry.dnssecAuthenticatedDataSeen ? QStringLiteral("AD seen") : QStringLiteral("No AD");
@@ -272,6 +276,8 @@ QVariant ResolverModel::headerData(int section, Qt::Orientation orientation, int
         return QStringLiteral("Max");
     case LossColumn:
         return QStringLiteral("Loss (%)");
+    case TimelineColumn:
+        return QStringLiteral("Timeline");
     case DnssecColumn:
         return QStringLiteral("DNSSEC");
     case StatusColumn:

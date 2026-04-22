@@ -21,6 +21,7 @@ public:
         MinColumn,
         MaxColumn,
         LossColumn,
+        TimelineColumn,
         DnssecColumn,
         StatusColumn,
         ColumnCount

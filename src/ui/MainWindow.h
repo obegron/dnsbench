@@ -54,6 +54,7 @@ private:
     void exportResults();
     void cloneResults();
     void showResolverContextMenu(const QPoint& position);
+    void openTimelineForIndex(const QModelIndex& proxyIndex);
     void appendLogLine(const QString& line);
     void updateProgress(int completed, int total, qint64 elapsedMs);
     void updateConclusions();

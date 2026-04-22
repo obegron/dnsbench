@@ -47,6 +47,7 @@ set(DNSBENCH_APP_SOURCES
     src/ui/AddResolverDialog.cpp
     src/ui/MainWindow.cpp
     src/ui/ResultsTab.cpp
+    src/ui/TimelineChart.cpp
     src/benchmark/BenchmarkController.cpp
     src/benchmark/DohResolver.cpp
     src/benchmark/DotResolver.cpp
