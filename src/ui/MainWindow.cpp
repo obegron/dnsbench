@@ -45,6 +45,7 @@
 #include <QTableView>
 #include <QTextBrowser>
 #include <QTextDocument>
+#include <QTimer>
 #include <QToolBar>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -54,6 +55,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <utility>
 
 namespace {
 
@@ -955,6 +957,10 @@ void MainWindow::buildUi()
     tabs->addTab(m_resultsTab, QStringLiteral("Results"));
     tabs->addTab(m_log, QStringLiteral("Log"));
 
+    m_modelFlushTimer = new QTimer(this);
+    m_modelFlushTimer->setInterval(100);
+    connect(m_modelFlushTimer, &QTimer::timeout, this, &MainWindow::flushPendingModelUpdates);
+
     auto* splitter = new QSplitter(Qt::Vertical, this);
     splitter->addWidget(m_table);
     splitter->addWidget(tabs);
@@ -1027,12 +1033,16 @@ void MainWindow::buildUi()
 void MainWindow::connectController()
 {
     connect(&m_controller, &BenchmarkController::progressUpdated, this, &MainWindow::updateProgress);
-    connect(&m_controller, &BenchmarkController::resolverFinished, this, [this](const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples) {
-        m_model.updateStats(resolverId, stats, status, dnssecAuthenticatedDataSeen, samples);
-    });
-    connect(&m_controller, &BenchmarkController::resolverStatusChanged, &m_model, &ResolverModel::updateStatus);
+    connect(&m_controller, &BenchmarkController::resolverFinished, this, &MainWindow::queueResolverFinished);
+    connect(&m_controller, &BenchmarkController::resolverStatusChanged, this, &MainWindow::queueResolverStatus);
     connect(&m_controller, &BenchmarkController::logLine, this, &MainWindow::appendLogLine);
-    connect(&m_controller, &BenchmarkController::benchmarkFinished, this, &MainWindow::updateConclusions);
+    connect(&m_controller, &BenchmarkController::benchmarkFinished, this, [this]() {
+        flushPendingModelUpdates();
+        m_modelFlushTimer->stop();
+        m_proxy->setDynamicSortFilter(true);
+        m_proxy->sort(m_table->horizontalHeader()->sortIndicatorSection(), m_table->horizontalHeader()->sortIndicatorOrder());
+        updateConclusions();
+    });
 }
 
 void MainWindow::detectSystemDns()
@@ -1169,6 +1179,10 @@ void MainWindow::startBenchmark()
         m_currentRunIds.insert(entry.id);
     }
 
+    m_modelFlushTimer->stop();
+    m_pendingResolverUpdates.clear();
+    m_pendingStatusUpdates.clear();
+    m_proxy->setDynamicSortFilter(false);
     m_model.resetRuntimeState();
     m_progress->setValue(0);
     m_resultsTab->setSummary(QStringLiteral("Benchmark running..."));
@@ -1187,6 +1201,10 @@ void MainWindow::startBenchmarkForResolver(const ResolverEntry& entry)
 
     ResolverEntry runEntry = entry;
     runEntry.enabled = true;
+    m_modelFlushTimer->stop();
+    m_pendingResolverUpdates.clear();
+    m_pendingStatusUpdates.clear();
+    m_proxy->setDynamicSortFilter(false);
     m_model.setResolverEnabled(runEntry.id, true);
     m_model.resetRuntimeState(runEntry.id);
     m_currentRunIds = {runEntry.id};
@@ -1362,6 +1380,43 @@ void MainWindow::openTimelineForIndex(const QModelIndex& proxyIndex)
         return;
     }
     openTimelineChartDialog(this, entries.at(sourceIndex.row()));
+}
+
+void MainWindow::queueResolverFinished(const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples)
+{
+    m_pendingResolverUpdates.insert(resolverId, PendingResolverUpdate{stats, status, dnssecAuthenticatedDataSeen, samples});
+    if (!m_modelFlushTimer->isActive()) {
+        m_modelFlushTimer->start();
+    }
+}
+
+void MainWindow::queueResolverStatus(const QString& resolverId, ResolverStatus status)
+{
+    m_pendingStatusUpdates.insert(resolverId, status);
+    if (!m_modelFlushTimer->isActive()) {
+        m_modelFlushTimer->start();
+    }
+}
+
+void MainWindow::flushPendingModelUpdates()
+{
+    if (m_pendingStatusUpdates.isEmpty() && m_pendingResolverUpdates.isEmpty()) {
+        return;
+    }
+
+    const QHash<QString, ResolverStatus> statusUpdates = std::exchange(m_pendingStatusUpdates, {});
+    const QHash<QString, PendingResolverUpdate> resolverUpdates = std::exchange(m_pendingResolverUpdates, {});
+
+    for (auto it = statusUpdates.cbegin(); it != statusUpdates.cend(); ++it) {
+        if (!resolverUpdates.contains(it.key())) {
+            m_model.updateStatus(it.key(), it.value());
+        }
+    }
+
+    for (auto it = resolverUpdates.cbegin(); it != resolverUpdates.cend(); ++it) {
+        const PendingResolverUpdate& update = it.value();
+        m_model.updateStats(it.key(), update.stats, update.status, update.dnssecAuthenticatedDataSeen, update.samples);
+    }
 }
 
 void MainWindow::appendLogLine(const QString& line)
