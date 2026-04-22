@@ -56,6 +56,8 @@
 
 namespace {
 
+constexpr int renderedMarkdownRowLimit = 250;
+
 class PinnedSortProxyModel : public QSortFilterProxyModel {
 public:
     using QSortFilterProxyModel::QSortFilterProxyModel;
@@ -1220,9 +1222,20 @@ void MainWindow::cloneResults()
     dialog->resize(1000, 500);
 
     const QString markdown = ResultExporter::toTextTable(m_model.entries());
-    auto* text = new QTextBrowser(dialog);
-    text->setOpenExternalLinks(false);
-    text->setMarkdown(markdown);
+    const bool renderMarkdown = m_model.rowCount() <= renderedMarkdownRowLimit;
+    QWidget* text = nullptr;
+    if (renderMarkdown) {
+        auto* browser = new QTextBrowser(dialog);
+        browser->setOpenExternalLinks(false);
+        browser->setMarkdown(markdown);
+        text = browser;
+    } else {
+        auto* editor = new QPlainTextEdit(dialog);
+        editor->setReadOnly(true);
+        editor->setLineWrapMode(QPlainTextEdit::NoWrap);
+        editor->setPlainText(markdown);
+        text = editor;
+    }
 
     auto* copyButton = new QPushButton(QStringLiteral("Copy Markdown"), dialog);
     connect(copyButton, &QPushButton::clicked, dialog, [markdown]() {
@@ -1230,6 +1243,9 @@ void MainWindow::cloneResults()
     });
 
     auto* controls = new QHBoxLayout();
+    if (!renderMarkdown) {
+        controls->addWidget(new QLabel(QStringLiteral("Large result set shown as plain text for responsiveness."), dialog));
+    }
     controls->addStretch();
     controls->addWidget(copyButton);
 
