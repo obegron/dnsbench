@@ -25,16 +25,6 @@ ctest --test-dir build --output-on-failure
 
 On startup the Linux detector reads DNS servers from `resolvectl status --json=short` when available, falling back to `/etc/resolv.conf`. Detected resolvers are pinned and enabled by default.
 
-## Screenshots
-
-Screenshot placeholder: main results table after a benchmark run.
-
-Suggested path: `docs/screenshots/main-window.png`
-
-Screenshot placeholder: expanded latency timeline comparison.
-
-Suggested path: `docs/screenshots/timeline-comparison.png`
-
 ## Import Resolvers
 
 Use `Import` in the toolbar to add many resolvers at once. Imported resolvers are treated like normal user-added resolvers and are saved in settings.
