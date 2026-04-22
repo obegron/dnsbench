@@ -93,6 +93,32 @@ bool includeInMarkdownTable(const ResolverEntry& entry)
     return entry.enabled && entry.status != ResolverStatus::Disabled;
 }
 
+QList<ResolverEntry> markdownEntriesFor(const QList<ResolverEntry>& entries)
+{
+    QList<ResolverEntry> result;
+    for (const ResolverEntry& entry : entries) {
+        if (includeInMarkdownTable(entry)) {
+            result.push_back(entry);
+        }
+    }
+
+    std::sort(result.begin(), result.end(), [](const ResolverEntry& left, const ResolverEntry& right) {
+        const bool leftMeasured = left.status == ResolverStatus::Finished && left.stats.hasSamples();
+        const bool rightMeasured = right.status == ResolverStatus::Finished && right.stats.hasSamples();
+        if (leftMeasured != rightMeasured) {
+            return leftMeasured;
+        }
+        if (leftMeasured && rightMeasured) {
+            return resultLessThan(left, right);
+        }
+        if (left.status != right.status) {
+            return statusToString(left.status) < statusToString(right.status);
+        }
+        return QString::localeAwareCompare(left.effectiveName(), right.effectiveName()) < 0;
+    });
+    return result;
+}
+
 bool saveText(const QString& path, const QString& content, QString* error)
 {
     QFile file(path);
@@ -139,14 +165,12 @@ QString ResultExporter::toCsv(const QList<ResolverEntry>& entries)
 QString ResultExporter::toTextTable(const QList<ResolverEntry>& entries)
 {
     const QHash<QString, int> ranks = ranksFor(entries);
+    const QList<ResolverEntry> sortedEntries = markdownEntriesFor(entries);
     QString out;
     QTextStream stream(&out);
     stream << "| Rank | Name | Address | Proto | Median | P90 | Mean | Stddev | Min | Max | Loss | DNSSEC | Status | Verdict |\n";
     stream << "|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n";
-    for (const ResolverEntry& entry : entries) {
-        if (!includeInMarkdownTable(entry)) {
-            continue;
-        }
+    for (const ResolverEntry& entry : sortedEntries) {
         const int rank = ranks.value(entry.id, 0);
         stream << "| "
                << (rank > 0 ? QString::number(rank) : QStringLiteral("-")) << " | "

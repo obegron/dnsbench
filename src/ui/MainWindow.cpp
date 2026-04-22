@@ -67,7 +67,32 @@ protected:
         if (leftRank != rightRank) {
             return sortOrder() == Qt::AscendingOrder ? leftRank < rightRank : leftRank > rightRank;
         }
-        return QSortFilterProxyModel::lessThan(left, right);
+
+        switch (static_cast<ResolverModel::Column>(left.column())) {
+        case ResolverModel::PinColumn:
+        case ResolverModel::DisplayNameColumn:
+        case ResolverModel::AddressColumn:
+        case ResolverModel::ProtocolColumn:
+        case ResolverModel::DnssecColumn:
+        case ResolverModel::StatusColumn:
+            return QString::localeAwareCompare(
+                left.data(Qt::DisplayRole).toString(),
+                right.data(Qt::DisplayRole).toString()) < 0;
+        case ResolverModel::MedianColumn:
+        case ResolverModel::P90Column:
+        case ResolverModel::MeanColumn:
+        case ResolverModel::StddevColumn:
+        case ResolverModel::MinColumn:
+        case ResolverModel::MaxColumn:
+        case ResolverModel::LossColumn:
+            return left.data(Qt::UserRole).toDouble() < right.data(Qt::UserRole).toDouble();
+        case ResolverModel::TimelineColumn:
+            return left.sibling(left.row(), ResolverModel::MedianColumn).data(Qt::UserRole).toDouble()
+                < right.sibling(right.row(), ResolverModel::MedianColumn).data(Qt::UserRole).toDouble();
+        case ResolverModel::ColumnCount:
+            break;
+        }
+        return false;
     }
 
 private:
@@ -396,7 +421,7 @@ void MainWindow::buildUi()
     toolbar->addAction(QStringLiteral("Detect System DNS"), this, &MainWindow::detectSystemDns);
     toolbar->addAction(QStringLiteral("Restore Built-ins"), this, &MainWindow::restoreBuiltInResolvers);
     toolbar->addAction(QStringLiteral("Export"), this, &MainWindow::exportResults);
-    toolbar->addAction(QStringLiteral("Clone Results"), this, &MainWindow::cloneResults);
+    toolbar->addAction(QStringLiteral("Copy Results"), this, &MainWindow::cloneResults);
     toolbar->addSeparator();
 
     m_ipv4Toggle = new QCheckBox(QStringLiteral("IPv4"), this);
@@ -563,7 +588,9 @@ void MainWindow::exportResults()
     }
 
     QString error;
-    const bool ok = path.endsWith(QStringLiteral(".txt"), Qt::CaseInsensitive)
+    const bool markdownExport = path.endsWith(QStringLiteral(".txt"), Qt::CaseInsensitive)
+        || path.endsWith(QStringLiteral(".md"), Qt::CaseInsensitive);
+    const bool ok = markdownExport
         ? ResultExporter::saveTextTable(path, m_model.entries(), &error)
         : ResultExporter::saveCsv(path, m_model.entries(), &error);
     if (!ok) {
@@ -575,7 +602,7 @@ void MainWindow::cloneResults()
 {
     auto* dialog = new QDialog(this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->setWindowTitle(QStringLiteral("Cloned Results"));
+    dialog->setWindowTitle(QStringLiteral("Copy Results"));
     dialog->resize(1000, 500);
 
     const QString markdown = ResultExporter::toTextTable(m_model.entries());
