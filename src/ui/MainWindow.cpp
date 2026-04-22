@@ -408,18 +408,22 @@ bool splitAddressPort(QString* address, int* port)
 bool inferProtocol(const QString& address, ResolverProtocol* protocol)
 {
     const QString trimmed = address.trimmed();
-    const QUrl url(trimmed);
-    if (url.isValid() && (url.scheme() == QLatin1String("https") || url.scheme() == QLatin1String("http")) && !url.host().isEmpty()) {
+    QString candidateAddress = trimmed;
+    int ignoredPort = 0;
+    splitAddressPort(&candidateAddress, &ignoredPort);
+
+    QHostAddress host;
+    if (host.setAddress(candidateAddress)) {
         if (protocol) {
-            *protocol = ResolverProtocol::DoH;
+            *protocol = host.protocol() == QAbstractSocket::IPv6Protocol ? ResolverProtocol::IPv6 : ResolverProtocol::IPv4;
         }
         return true;
     }
 
-    QHostAddress host;
-    if (host.setAddress(trimmed)) {
+    const QUrl url(trimmed);
+    if (url.isValid() && (url.scheme() == QLatin1String("https") || url.scheme() == QLatin1String("http")) && !url.host().isEmpty()) {
         if (protocol) {
-            *protocol = host.protocol() == QAbstractSocket::IPv6Protocol ? ResolverProtocol::IPv6 : ResolverProtocol::IPv4;
+            *protocol = ResolverProtocol::DoH;
         }
         return true;
     }
@@ -453,6 +457,15 @@ bool normalizeImportedResolver(ResolverEntry* entry, QString* reason)
     }
 
     splitAddressPort(&entry->address, &entry->port);
+    QHostAddress importedHost;
+    if (importedHost.setAddress(entry->address)) {
+        const ResolverProtocol inferredProtocol = importedHost.protocol() == QAbstractSocket::IPv6Protocol
+            ? ResolverProtocol::IPv6
+            : ResolverProtocol::IPv4;
+        if (entry->protocol == ResolverProtocol::IPv4 || entry->protocol == ResolverProtocol::IPv6) {
+            entry->protocol = inferredProtocol;
+        }
+    }
     if (entry->port <= 0 || entry->port > 65535) {
         entry->port = defaultPortForProtocol(entry->protocol);
     }
@@ -650,6 +663,21 @@ bool resolverFromLooseRow(const QStringList& rawValues, ResolverEntry* entry)
     }
     if (values.isEmpty()) {
         return false;
+    }
+
+    if (values.size() == 1) {
+        QString address = values.first();
+        int port = defaultPortForProtocol(ResolverProtocol::IPv4);
+        splitAddressPort(&address, &port);
+        QHostAddress host;
+        if (host.setAddress(address)) {
+            entry->address = address;
+            entry->protocol = host.protocol() == QAbstractSocket::IPv6Protocol ? ResolverProtocol::IPv6 : ResolverProtocol::IPv4;
+            entry->port = port;
+            entry->enabled = true;
+            entry->pinned = false;
+            return true;
+        }
     }
 
     int protocolIndex = -1;
