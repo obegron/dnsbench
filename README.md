@@ -29,7 +29,7 @@ On startup the Linux detector reads DNS servers from `resolvectl status --json=s
 
 Implemented for the Linux target first:
 
-- Qt6 desktop UI with resolver table, protocol toggles, sample count, progress, ETA, conclusions, and log tabs.
+- Qt6 desktop UI with resolver table, protocol toggles, sample count, progress, ETA, results, and log tabs.
 - Add resolver dialog with protocol-aware validation.
 - UDP, DoH, and DoT resolver backends.
 - Warm-up sidelining before full benchmark runs.
