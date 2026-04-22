@@ -23,6 +23,7 @@ public:
     void stop();
     bool isRunning() const;
     void setMaxConcurrentResolvers(int maxConcurrentResolvers);
+    void setVerboseLogging(bool verboseLogging);
 
 signals:
     void progressUpdated(int completed, int total, qint64 elapsedMs);
@@ -41,7 +42,9 @@ private:
     int m_completed = 0;
     int m_total = 0;
     int m_finishedResolvers = 0;
+    qint64 m_lastProgressEmitMs = 0;
     bool m_running = false;
+    bool m_verboseLogging = false;
     QThreadPool m_threadPool;
     std::shared_ptr<std::atomic_bool> m_cancelled;
     QElapsedTimer m_elapsed;

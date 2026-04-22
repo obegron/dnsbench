@@ -20,6 +20,13 @@ private slots:
         QCOMPARE(qFromBigEndian<quint16>(reinterpret_cast<const uchar*>(packet.constData() + 27)), quint16(1));
     }
 
+    void treatsTrailingDotAsAbsoluteQueryName()
+    {
+        QCOMPARE(
+            DnsPacket::buildQuery(QStringLiteral("example.com."), 0x1234, 1),
+            DnsPacket::buildQuery(QStringLiteral("example.com"), 0x1234, 1));
+    }
+
     void validatesResponseTransactionId()
     {
         QByteArray response(12, '\0');

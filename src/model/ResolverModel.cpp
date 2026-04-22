@@ -30,6 +30,21 @@ QString protocolToString(ResolverProtocol protocol)
     return QStringLiteral("IPv4");
 }
 
+QString protocolDisplayString(ResolverProtocol protocol)
+{
+    switch (protocol) {
+    case ResolverProtocol::IPv4:
+        return QString::fromUtf8("\xf0\x9f\x8c\x90 IPv4");
+    case ResolverProtocol::IPv6:
+        return QString::fromUtf8("\xf0\x9f\x8c\x90 IPv6");
+    case ResolverProtocol::DoH:
+        return QString::fromUtf8("\xf0\x9f\x94\x92 DoH");
+    case ResolverProtocol::DoT:
+        return QString::fromUtf8("\xf0\x9f\x94\x92 DoT");
+    }
+    return protocolToString(protocol);
+}
+
 ResolverProtocol protocolFromString(const QString& value, bool* ok)
 {
     const QString normalized = value.trimmed().toLower();
@@ -166,6 +181,8 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
         switch (column) {
         case PinColumn:
             return entry.pinned;
+        case ProtocolColumn:
+            return static_cast<int>(entry.protocol);
         case MedianColumn:
             return entry.stats.medianMs;
         case P90Column:
@@ -203,7 +220,7 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
             ? entry.address
             : QStringLiteral("%1:%2").arg(entry.address).arg(entry.port);
     case ProtocolColumn:
-        return protocolToString(entry.protocol);
+        return protocolDisplayString(entry.protocol);
     case MedianColumn:
     case P90Column:
     case MeanColumn:

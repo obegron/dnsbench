@@ -33,6 +33,7 @@
 #include <QStyledItemDelegate>
 #include <QTabWidget>
 #include <QTableView>
+#include <QTextDocument>
 #include <QToolBar>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -222,6 +223,7 @@ void MainWindow::buildUi()
     m_resultsTab = new ResultsTab(this);
     m_log = new QPlainTextEdit(this);
     m_log->setReadOnly(true);
+    m_log->document()->setMaximumBlockCount(5000);
     m_log->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_log, &QPlainTextEdit::customContextMenuRequested, this, [this](const QPoint& position) {
         std::unique_ptr<QMenu> menu(m_log->createStandardContextMenu());
@@ -266,6 +268,10 @@ void MainWindow::buildUi()
         box->setChecked(true);
         toolbar->addWidget(box);
     }
+    toolbar->addSeparator();
+    m_verboseLogToggle = new QCheckBox(QStringLiteral("Verbose Log"), this);
+    m_verboseLogToggle->setToolTip(QStringLiteral("Log every query and response. Leave off for smoother large benchmarks."));
+    toolbar->addWidget(m_verboseLogToggle);
 
     toolbar->addSeparator();
     toolbar->addWidget(new QLabel(QStringLiteral("Samples"), this));
@@ -373,6 +379,7 @@ void MainWindow::startBenchmark()
     m_progress->setValue(0);
     m_resultsTab->setSummary(QStringLiteral("Benchmark running..."));
     appendLogLine(QStringLiteral("Starting benchmark."));
+    m_controller.setVerboseLogging(m_verboseLogToggle->isChecked());
     m_controller.start(runEntries, m_sampleSpin->value(), m_delaySpin->value(), loadDomains());
 }
 
@@ -391,6 +398,7 @@ void MainWindow::startBenchmarkForResolver(const ResolverEntry& entry)
     m_progress->setValue(0);
     m_resultsTab->setSummary(QStringLiteral("Benchmark running for %1...").arg(runEntry.effectiveName()));
     appendLogLine(QStringLiteral("Starting single-resolver benchmark for %1.").arg(runEntry.effectiveName()));
+    m_controller.setVerboseLogging(m_verboseLogToggle->isChecked());
     m_controller.start({runEntry}, m_sampleSpin->value(), m_delaySpin->value(), loadDomains());
 }
 
@@ -456,6 +464,14 @@ void MainWindow::showResolverContextMenu(const QPoint& position)
     menu.addAction(QStringLiteral("Benchmark This Resolver"), this, [this, entry]() {
         startBenchmarkForResolver(entry);
     });
+    QAction* removeAction = menu.addAction(QStringLiteral("Remove Resolver"), this, [this, sourceIndex]() {
+        if (m_controller.isRunning()) {
+            QMessageBox::information(this, QStringLiteral("Benchmark Running"), QStringLiteral("Stop the current benchmark before removing resolvers."));
+            return;
+        }
+        m_model.removeRowsByIndexes({sourceIndex});
+    });
+    removeAction->setEnabled(!m_controller.isRunning());
     menu.addSeparator();
     menu.addAction(QStringLiteral("Copy Address"), this, [address]() {
         QApplication::clipboard()->setText(address);
@@ -640,6 +656,7 @@ void MainWindow::loadSettings()
     m_ipv6Toggle->setChecked(settings.value(QStringLiteral("protocols/ipv6"), true).toBool());
     m_dohToggle->setChecked(settings.value(QStringLiteral("protocols/doh"), true).toBool());
     m_dotToggle->setChecked(settings.value(QStringLiteral("protocols/dot"), true).toBool());
+    m_verboseLogToggle->setChecked(settings.value(QStringLiteral("log/verbose"), false).toBool());
 
     const int count = settings.beginReadArray(QStringLiteral("resolvers"));
     for (int i = 0; i < count; ++i) {
@@ -673,6 +690,7 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("protocols/ipv6"), m_ipv6Toggle->isChecked());
     settings.setValue(QStringLiteral("protocols/doh"), m_dohToggle->isChecked());
     settings.setValue(QStringLiteral("protocols/dot"), m_dotToggle->isChecked());
+    settings.setValue(QStringLiteral("log/verbose"), m_verboseLogToggle->isChecked());
 
     const QList<ResolverEntry> entries = m_model.entries();
     settings.beginWriteArray(QStringLiteral("resolvers"));

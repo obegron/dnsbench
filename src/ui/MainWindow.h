@@ -36,6 +36,7 @@ private:
     QCheckBox* m_ipv6Toggle = nullptr;
     QCheckBox* m_dohToggle = nullptr;
     QCheckBox* m_dotToggle = nullptr;
+    QCheckBox* m_verboseLogToggle = nullptr;
     ResultsTab* m_resultsTab = nullptr;
     QPlainTextEdit* m_log = nullptr;
     QSet<QString> m_currentRunIds;

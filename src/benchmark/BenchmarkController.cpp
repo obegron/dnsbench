@@ -61,12 +61,14 @@ public:
         int sampleCount,
         int interQueryDelayMs,
         QStringList domains,
+        bool verboseLogging,
         std::shared_ptr<std::atomic_bool> cancelled)
         : m_controller(std::move(controller))
         , m_entry(std::move(entry))
         , m_sampleCount(sampleCount)
         , m_interQueryDelayMs(std::max(0, interQueryDelayMs))
         , m_domains(std::move(domains))
+        , m_verboseLogging(verboseLogging)
         , m_cancelled(std::move(cancelled))
     {
         setAutoDelete(true);
@@ -129,7 +131,7 @@ public:
 
         for (int i = 0; i < m_sampleCount && !isCancelled(); ++i) {
             const QString domain = domainForSample(i);
-            postLog(QStringLiteral("Query %1 via %2.").arg(domain, m_entry.effectiveName()));
+            postVerboseLog(QStringLiteral("Query %1 via %2.").arg(domain, m_entry.effectiveName()));
 
             qint64 rttMs = 0;
             QString error;
@@ -137,11 +139,11 @@ public:
             if (success) {
                 samples.push_back(rttMs);
                 dnssecAuthenticatedDataSeen = dnssecAuthenticatedDataSeen || resolver->lastAuthenticatedDataBit();
-                postLog(QStringLiteral("Response %1 via %2 in %3 ms.")
+                postVerboseLog(QStringLiteral("Response %1 via %2 in %3 ms.")
                         .arg(domain, m_entry.effectiveName())
                         .arg(rttMs));
             } else {
-                postLog(error.isEmpty()
+                postVerboseLog(error.isEmpty()
                     ? QStringLiteral("Timeout/failure for %1 via %2.").arg(domain, m_entry.effectiveName())
                     : QStringLiteral("Failure for %1 via %2: %3.").arg(domain, m_entry.effectiveName(), error));
             }
@@ -169,6 +171,7 @@ private:
     int m_sampleCount = 0;
     int m_interQueryDelayMs = 20;
     QStringList m_domains;
+    bool m_verboseLogging = false;
     std::shared_ptr<std::atomic_bool> m_cancelled;
 
     bool isCancelled() const
@@ -240,6 +243,13 @@ private:
         });
     }
 
+    void postVerboseLog(QString line)
+    {
+        if (m_verboseLogging) {
+            postLog(std::move(line));
+        }
+    }
+
     void postProgress(int completedDelta)
     {
         post([completedDelta](BenchmarkController* controller) {
@@ -299,6 +309,7 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
 
     m_completed = 0;
     m_finishedResolvers = 0;
+    m_lastProgressEmitMs = 0;
     m_total = m_resolvers.size() * m_sampleCount;
     m_running = true;
     m_cancelled = std::make_shared<std::atomic_bool>(false);
@@ -314,7 +325,7 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
     }
 
     for (const ResolverEntry& entry : std::as_const(m_resolvers)) {
-        m_threadPool.start(new ResolverBenchmarkTask(QPointer<BenchmarkController>(this), entry, m_sampleCount, m_interQueryDelayMs, m_domains, m_cancelled));
+        m_threadPool.start(new ResolverBenchmarkTask(QPointer<BenchmarkController>(this), entry, m_sampleCount, m_interQueryDelayMs, m_domains, m_verboseLogging, m_cancelled));
     }
 }
 
@@ -343,6 +354,11 @@ void BenchmarkController::setMaxConcurrentResolvers(int maxConcurrentResolvers)
     m_threadPool.setMaxThreadCount(std::max(1, maxConcurrentResolvers));
 }
 
+void BenchmarkController::setVerboseLogging(bool verboseLogging)
+{
+    m_verboseLogging = verboseLogging;
+}
+
 void BenchmarkController::handleTaskProgress(int completedDelta)
 {
     if (!m_running) {
@@ -350,7 +366,11 @@ void BenchmarkController::handleTaskProgress(int completedDelta)
     }
 
     m_completed = std::min(m_total, m_completed + completedDelta);
-    emit progressUpdated(m_completed, m_total, m_elapsed.elapsed());
+    const qint64 elapsedMs = m_elapsed.elapsed();
+    if (m_completed >= m_total || elapsedMs - m_lastProgressEmitMs >= 100) {
+        m_lastProgressEmitMs = elapsedMs;
+        emit progressUpdated(m_completed, m_total, elapsedMs);
+    }
 }
 
 void BenchmarkController::handleTaskComplete()
@@ -375,6 +395,7 @@ void BenchmarkController::finishAll()
     if (m_cancelled) {
         m_cancelled->store(true, std::memory_order_relaxed);
     }
+    emit progressUpdated(m_completed, m_total, m_elapsed.elapsed());
     emit logLine(QStringLiteral("Benchmark complete."));
     emit benchmarkFinished();
 }

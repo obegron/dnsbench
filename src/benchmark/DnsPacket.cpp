@@ -26,6 +26,8 @@ QByteArray DnsPacket::buildQuery(const QString& domain, quint16 transactionId, q
     appendUInt16(packet, 0);      // NSCOUNT
     appendUInt16(packet, 0);      // ARCOUNT
 
+    // This builds a raw DNS wire-format QNAME. The OS resolver and resolv.conf
+    // search domains are not consulted, so benchmarks use the requested name.
     const QString normalized = domain.trimmed().remove(QRegularExpression(QStringLiteral("\\.$")));
     const QStringList labels = normalized.split(QLatin1Char('.'), Qt::SkipEmptyParts);
     for (const QString& label : labels) {
