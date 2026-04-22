@@ -21,6 +21,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeySequence>
 #include <QLabel>
 #include <QMenuBar>
 #include <QMenu>
@@ -920,12 +921,18 @@ void MainWindow::buildUi()
     m_table->setColumnWidth(ResolverModel::TimelineColumn, 150);
     m_table->verticalHeader()->setVisible(false);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_table->setAlternatingRowColors(true);
     m_table->setItemDelegateForColumn(ResolverModel::MedianColumn, new LatencyBarDelegate(m_table));
     m_table->setItemDelegateForColumn(ResolverModel::TimelineColumn, new TimelineSparklineDelegate(m_table));
     m_table->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_table, &QTableView::customContextMenuRequested, this, &MainWindow::showResolverContextMenu);
     connect(m_table, &QTableView::clicked, this, &MainWindow::openTimelineForIndex);
+    auto* removeSelectedAction = new QAction(QStringLiteral("Remove Selected Resolvers"), this);
+    removeSelectedAction->setShortcut(QKeySequence::Delete);
+    removeSelectedAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    connect(removeSelectedAction, &QAction::triggered, this, &MainWindow::removeSelectedResolvers);
+    m_table->addAction(removeSelectedAction);
 
     m_resultsTab = new ResultsTab(this);
     m_log = new QPlainTextEdit(this);
@@ -1261,6 +1268,9 @@ void MainWindow::showResolverContextMenu(const QPoint& position)
     if (!proxyIndex.isValid()) {
         return;
     }
+    if (!m_table->selectionModel()->isSelected(proxyIndex)) {
+        m_table->selectionModel()->select(proxyIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    }
 
     const QModelIndex sourceIndex = m_proxy->mapToSource(proxyIndex);
     const QModelIndex addressIndex = m_model.index(sourceIndex.row(), ResolverModel::AddressColumn);
@@ -1278,16 +1288,13 @@ void MainWindow::showResolverContextMenu(const QPoint& position)
     menu.addAction(QStringLiteral("Benchmark This Resolver"), this, [this, entry]() {
         startBenchmarkForResolver(entry);
     });
-    QAction* removeAction = menu.addAction(QStringLiteral("Remove Resolver"), this, [this, sourceIndex]() {
-        if (m_controller.isRunning()) {
-            QMessageBox::information(this, QStringLiteral("Benchmark Running"), QStringLiteral("Stop the current benchmark before removing resolvers."));
-            return;
-        }
-        const QList<ResolverEntry> currentEntries = m_model.entries();
-        if (sourceIndex.row() >= 0 && sourceIndex.row() < currentEntries.size() && currentEntries.at(sourceIndex.row()).builtInResolver) {
-            m_hiddenBuiltInResolverIds.insert(currentEntries.at(sourceIndex.row()).id);
-        }
-        m_model.removeRowsByIndexes({sourceIndex});
+    const int selectedRows = m_table->selectionModel()->selectedRows().size();
+    QAction* removeAction = menu.addAction(selectedRows > 1
+            ? QStringLiteral("Remove Selected Resolvers (%1)").arg(selectedRows)
+            : QStringLiteral("Remove Resolver"),
+        this,
+        [this]() {
+            removeSelectedResolvers();
     });
     removeAction->setEnabled(!m_controller.isRunning());
     menu.addSeparator();
@@ -1301,6 +1308,46 @@ void MainWindow::showResolverContextMenu(const QPoint& position)
         QApplication::clipboard()->setText(cellText);
     });
     menu.exec(m_table->viewport()->mapToGlobal(position));
+}
+
+void MainWindow::removeSelectedResolvers()
+{
+    if (m_controller.isRunning()) {
+        QMessageBox::information(this, QStringLiteral("Benchmark Running"), QStringLiteral("Stop the current benchmark before removing resolvers."));
+        return;
+    }
+
+    QModelIndexList selectedRows = m_table->selectionModel()->selectedRows();
+    if (selectedRows.isEmpty()) {
+        return;
+    }
+
+    if (selectedRows.size() > 1) {
+        const QMessageBox::StandardButton answer = QMessageBox::question(
+            this,
+            QStringLiteral("Remove Resolvers"),
+            QStringLiteral("Remove %1 selected resolvers?").arg(selectedRows.size()));
+        if (answer != QMessageBox::Yes) {
+            return;
+        }
+    }
+
+    QModelIndexList sourceRows;
+    sourceRows.reserve(selectedRows.size());
+    const QList<ResolverEntry> currentEntries = m_model.entries();
+    for (const QModelIndex& proxyRow : std::as_const(selectedRows)) {
+        const QModelIndex sourceIndex = m_proxy->mapToSource(proxyRow);
+        if (!sourceIndex.isValid()) {
+            continue;
+        }
+        if (sourceIndex.row() >= 0 && sourceIndex.row() < currentEntries.size()
+            && currentEntries.at(sourceIndex.row()).builtInResolver) {
+            m_hiddenBuiltInResolverIds.insert(currentEntries.at(sourceIndex.row()).id);
+        }
+        sourceRows.push_back(sourceIndex);
+    }
+
+    m_model.removeRowsByIndexes(sourceRows);
 }
 
 void MainWindow::openTimelineForIndex(const QModelIndex& proxyIndex)
