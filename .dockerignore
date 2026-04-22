@@ -1,0 +1,13 @@
+.git
+.codex
+build
+build-*
+cmake-build-*
+*.user
+*.swp
+.DS_Store
+dnsbench-results.*
+*.png
+*.jpg
+*.jpeg
+*.webp
