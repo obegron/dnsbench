@@ -40,11 +40,13 @@ private:
     ResultsTab* m_resultsTab = nullptr;
     QPlainTextEdit* m_log = nullptr;
     QSet<QString> m_currentRunIds;
+    QSet<QString> m_hiddenBuiltInResolverIds;
 
     void buildUi();
     void connectController();
     void detectSystemDns();
     void addBuiltInResolvers();
+    void restoreBuiltInResolvers();
     void addResolver();
     void startBenchmark();
     void startBenchmarkForResolver(const ResolverEntry& entry);

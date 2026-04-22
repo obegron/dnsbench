@@ -256,6 +256,7 @@ void MainWindow::buildUi()
     toolbar->addSeparator();
     toolbar->addAction(QStringLiteral("Add Resolver"), this, &MainWindow::addResolver);
     toolbar->addAction(QStringLiteral("Detect System DNS"), this, &MainWindow::detectSystemDns);
+    toolbar->addAction(QStringLiteral("Restore Built-ins"), this, &MainWindow::restoreBuiltInResolvers);
     toolbar->addAction(QStringLiteral("Export"), this, &MainWindow::exportResults);
     toolbar->addAction(QStringLiteral("Clone Results"), this, &MainWindow::cloneResults);
     toolbar->addSeparator();
@@ -331,12 +332,21 @@ void MainWindow::addBuiltInResolvers()
 {
     int added = 0;
     for (const ResolverEntry& entry : builtInResolvers()) {
+        if (m_hiddenBuiltInResolverIds.contains(entry.id)) {
+            continue;
+        }
         if (!m_model.find(entry.id)) {
             m_model.addResolver(entry);
             ++added;
         }
     }
     appendLogLine(QStringLiteral("Added %1 built-in public resolver(s).").arg(added));
+}
+
+void MainWindow::restoreBuiltInResolvers()
+{
+    m_hiddenBuiltInResolverIds.clear();
+    addBuiltInResolvers();
 }
 
 void MainWindow::addResolver()
@@ -468,6 +478,10 @@ void MainWindow::showResolverContextMenu(const QPoint& position)
         if (m_controller.isRunning()) {
             QMessageBox::information(this, QStringLiteral("Benchmark Running"), QStringLiteral("Stop the current benchmark before removing resolvers."));
             return;
+        }
+        const QList<ResolverEntry> currentEntries = m_model.entries();
+        if (sourceIndex.row() >= 0 && sourceIndex.row() < currentEntries.size() && currentEntries.at(sourceIndex.row()).builtInResolver) {
+            m_hiddenBuiltInResolverIds.insert(currentEntries.at(sourceIndex.row()).id);
         }
         m_model.removeRowsByIndexes({sourceIndex});
     });
@@ -657,6 +671,8 @@ void MainWindow::loadSettings()
     m_dohToggle->setChecked(settings.value(QStringLiteral("protocols/doh"), true).toBool());
     m_dotToggle->setChecked(settings.value(QStringLiteral("protocols/dot"), true).toBool());
     m_verboseLogToggle->setChecked(settings.value(QStringLiteral("log/verbose"), false).toBool());
+    const QStringList hiddenBuiltIns = settings.value(QStringLiteral("resolvers/hiddenBuiltIns")).toStringList();
+    m_hiddenBuiltInResolverIds = QSet<QString>(hiddenBuiltIns.cbegin(), hiddenBuiltIns.cend());
 
     const int count = settings.beginReadArray(QStringLiteral("resolvers"));
     for (int i = 0; i < count; ++i) {
@@ -691,6 +707,7 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("protocols/doh"), m_dohToggle->isChecked());
     settings.setValue(QStringLiteral("protocols/dot"), m_dotToggle->isChecked());
     settings.setValue(QStringLiteral("log/verbose"), m_verboseLogToggle->isChecked());
+    settings.setValue(QStringLiteral("resolvers/hiddenBuiltIns"), QStringList(m_hiddenBuiltInResolverIds.cbegin(), m_hiddenBuiltInResolverIds.cend()));
 
     const QList<ResolverEntry> entries = m_model.entries();
     settings.beginWriteArray(QStringLiteral("resolvers"));
