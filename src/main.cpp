@@ -12,6 +12,7 @@ int main(int argc, char* argv[])
 
     qRegisterMetaType<Statistics>("Statistics");
     qRegisterMetaType<ResolverStatus>("ResolverStatus");
+    qRegisterMetaType<QVector<ResolverSamplePoint>>("QVector<ResolverSamplePoint>");
 
     MainWindow window;
     window.show();

@@ -3,6 +3,7 @@
 #include "benchmark/Statistics.h"
 
 #include <QMetaType>
+#include <QVector>
 #include <QString>
 
 enum class ResolverProtocol {
@@ -21,6 +22,12 @@ enum class ResolverStatus {
     Disabled
 };
 
+struct ResolverSamplePoint {
+    int sampleIndex = 0;
+    qint64 rttMs = 0;
+    bool success = false;
+};
+
 struct ResolverEntry {
     QString id;
     QString address;
@@ -33,6 +40,7 @@ struct ResolverEntry {
     bool builtInResolver = false;
     ResolverStatus status = ResolverStatus::Idle;
     bool dnssecAuthenticatedDataSeen = false;
+    QVector<ResolverSamplePoint> samples;
     Statistics stats;
 
     QString effectiveName() const;
@@ -40,6 +48,8 @@ struct ResolverEntry {
 
 Q_DECLARE_METATYPE(ResolverProtocol)
 Q_DECLARE_METATYPE(ResolverStatus)
+Q_DECLARE_METATYPE(ResolverSamplePoint)
+Q_DECLARE_METATYPE(QVector<ResolverSamplePoint>)
 Q_DECLARE_METATYPE(ResolverEntry)
 
 QString protocolToString(ResolverProtocol protocol);

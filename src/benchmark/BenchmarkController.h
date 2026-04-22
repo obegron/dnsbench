@@ -27,7 +27,7 @@ public:
 
 signals:
     void progressUpdated(int completed, int total, qint64 elapsedMs);
-    void resolverFinished(const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen);
+    void resolverFinished(const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples);
     void resolverStatusChanged(const QString& resolverId, ResolverStatus status);
     void logLine(const QString& line);
     void benchmarkFinished();

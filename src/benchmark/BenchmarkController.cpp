@@ -105,7 +105,7 @@ public:
         if (successes < warmupSuccessThreshold) {
             const Statistics stats = Statistics::fromSamples({}, m_sampleCount);
             postStatus(ResolverStatus::Sidelined);
-            postResolverFinished(stats, ResolverStatus::Sidelined, false);
+            postResolverFinished(stats, ResolverStatus::Sidelined, false, {});
             QString message = QStringLiteral("Sidelined %1: %2/%3 warm-up responses.")
                     .arg(m_entry.effectiveName())
                     .arg(successes)
@@ -126,6 +126,8 @@ public:
 
         QVector<qint64> samples;
         samples.reserve(m_sampleCount);
+        QVector<ResolverSamplePoint> samplePoints;
+        samplePoints.reserve(m_sampleCount);
         bool dnssecAuthenticatedDataSeen = false;
         resolver->setTimeoutMs(fullQueryTimeoutMs);
 
@@ -138,11 +140,13 @@ public:
             const bool success = queryBlocking(resolver.get(), domain, &rttMs, &error);
             if (success) {
                 samples.push_back(rttMs);
+                samplePoints.push_back({i, rttMs, true});
                 dnssecAuthenticatedDataSeen = dnssecAuthenticatedDataSeen || resolver->lastAuthenticatedDataBit();
                 postVerboseLog(QStringLiteral("Response %1 via %2 in %3 ms.")
                         .arg(domain, m_entry.effectiveName())
                         .arg(rttMs));
             } else {
+                samplePoints.push_back({i, 0, false});
                 postVerboseLog(error.isEmpty()
                     ? QStringLiteral("Timeout/failure for %1 via %2.").arg(domain, m_entry.effectiveName())
                     : QStringLiteral("Failure for %1 via %2: %3.").arg(domain, m_entry.effectiveName(), error));
@@ -155,7 +159,7 @@ public:
 
         if (!isCancelled()) {
             const Statistics stats = Statistics::fromSamples(samples, m_sampleCount);
-            postResolverFinished(stats, ResolverStatus::Finished, dnssecAuthenticatedDataSeen);
+            postResolverFinished(stats, ResolverStatus::Finished, dnssecAuthenticatedDataSeen, samplePoints);
             postLog(QStringLiteral("Finished %1: median %2 ms, loss %3%.")
                     .arg(m_entry.effectiveName())
                     .arg(stats.medianMs, 0, 'f', 1)
@@ -257,11 +261,11 @@ private:
         });
     }
 
-    void postResolverFinished(Statistics stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen)
+    void postResolverFinished(Statistics stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, QVector<ResolverSamplePoint> samples)
     {
-        post([id = m_entry.id, stats, status, dnssecAuthenticatedDataSeen](BenchmarkController* controller) {
+        post([id = m_entry.id, stats, status, dnssecAuthenticatedDataSeen, samples = std::move(samples)](BenchmarkController* controller) {
             if (controller->m_running) {
-                emit controller->resolverFinished(id, stats, status, dnssecAuthenticatedDataSeen);
+                emit controller->resolverFinished(id, stats, status, dnssecAuthenticatedDataSeen, samples);
             }
         });
     }

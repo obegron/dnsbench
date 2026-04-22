@@ -380,7 +380,7 @@ void ResolverModel::removeRowsByIndexes(const QModelIndexList& indexes)
     }
 }
 
-void ResolverModel::updateStats(const QString& id, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen)
+void ResolverModel::updateStats(const QString& id, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples)
 {
     const int row = rowForId(id);
     if (row < 0) {
@@ -390,6 +390,7 @@ void ResolverModel::updateStats(const QString& id, const Statistics& stats, Reso
     m_entries[row].stats = stats;
     m_entries[row].status = status;
     m_entries[row].dnssecAuthenticatedDataSeen = dnssecAuthenticatedDataSeen;
+    m_entries[row].samples = samples;
     emit dataChanged(index(row, 0), index(row, StatusColumn));
     emit resolverChanged(m_entries[row]);
 }
@@ -440,6 +441,7 @@ void ResolverModel::resetRuntimeState()
         entry.stats = {};
         entry.status = ResolverStatus::Idle;
         entry.dnssecAuthenticatedDataSeen = false;
+        entry.samples.clear();
     }
     emit dataChanged(index(0, 0), index(m_entries.size() - 1, ColumnCount - 1));
 }
@@ -454,6 +456,7 @@ void ResolverModel::resetRuntimeState(const QString& id)
     m_entries[row].stats = {};
     m_entries[row].status = ResolverStatus::Idle;
     m_entries[row].dnssecAuthenticatedDataSeen = false;
+    m_entries[row].samples.clear();
     emit dataChanged(index(row, 0), index(row, StatusColumn));
     emit resolverChanged(m_entries[row]);
 }

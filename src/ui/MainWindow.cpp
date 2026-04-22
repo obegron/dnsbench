@@ -54,9 +54,34 @@ protected:
         const bool leftPinned = sourceModel()->index(left.row(), ResolverModel::PinColumn).data(Qt::UserRole).toBool();
         const bool rightPinned = sourceModel()->index(right.row(), ResolverModel::PinColumn).data(Qt::UserRole).toBool();
         if (leftPinned != rightPinned) {
-            return leftPinned;
+            return sortOrder() == Qt::AscendingOrder ? leftPinned : !leftPinned;
+        }
+
+        const int leftRank = sortRank(left.row());
+        const int rightRank = sortRank(right.row());
+        if (leftRank != rightRank) {
+            return sortOrder() == Qt::AscendingOrder ? leftRank < rightRank : leftRank > rightRank;
         }
         return QSortFilterProxyModel::lessThan(left, right);
+    }
+
+private:
+    int sortRank(int sourceRow) const
+    {
+        const auto status = static_cast<ResolverStatus>(sourceModel()->index(sourceRow, ResolverModel::StatusColumn).data(Qt::UserRole).toInt());
+        switch (status) {
+        case ResolverStatus::Finished:
+            return 0;
+        case ResolverStatus::Running:
+            return 1;
+        case ResolverStatus::Sidelined:
+        case ResolverStatus::Failed:
+            return 2;
+        case ResolverStatus::Idle:
+        case ResolverStatus::Disabled:
+            return 3;
+        }
+        return 3;
     }
 };
 
@@ -303,8 +328,8 @@ void MainWindow::buildUi()
 void MainWindow::connectController()
 {
     connect(&m_controller, &BenchmarkController::progressUpdated, this, &MainWindow::updateProgress);
-    connect(&m_controller, &BenchmarkController::resolverFinished, this, [this](const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen) {
-        m_model.updateStats(resolverId, stats, status, dnssecAuthenticatedDataSeen);
+    connect(&m_controller, &BenchmarkController::resolverFinished, this, [this](const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples) {
+        m_model.updateStats(resolverId, stats, status, dnssecAuthenticatedDataSeen, samples);
     });
     connect(&m_controller, &BenchmarkController::resolverStatusChanged, &m_model, &ResolverModel::updateStatus);
     connect(&m_controller, &BenchmarkController::logLine, this, &MainWindow::appendLogLine);
@@ -657,7 +682,7 @@ void MainWindow::updateConclusions()
     }
 
     const QString summary = lines.isEmpty() ? QStringLiteral("No completed resolver results.") : lines.join(QStringLiteral("\n"));
-    m_resultsTab->setSummary(summary);
+    m_resultsTab->setResults(summary, entries);
 }
 
 void MainWindow::loadSettings()
