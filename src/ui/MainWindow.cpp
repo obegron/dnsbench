@@ -997,6 +997,14 @@ void MainWindow::buildUi()
     m_delaySpin->setToolTip(QStringLiteral("Delay between queries sent by each resolver."));
     toolbar->addWidget(m_delaySpin);
 
+    toolbar->addSeparator();
+    toolbar->addWidget(new QLabel(QStringLiteral("Concurrent"), this));
+    m_concurrencySpin = new QSpinBox(this);
+    m_concurrencySpin->setRange(1, 500);
+    m_concurrencySpin->setValue(20);
+    m_concurrencySpin->setToolTip(QStringLiteral("Maximum number of resolvers benchmarked at the same time. Higher values finish large lists faster but can add network or resolver rate-limit noise."));
+    toolbar->addWidget(m_concurrencySpin);
+
     m_progress = new QProgressBar(this);
     m_progress->setRange(0, 100);
     m_progress->setValue(0);
@@ -1157,6 +1165,7 @@ void MainWindow::startBenchmark()
     m_resultsTab->setSummary(QStringLiteral("Benchmark running..."));
     appendLogLine(QStringLiteral("Starting benchmark."));
     m_controller.setVerboseLogging(m_verboseLogToggle->isChecked());
+    m_controller.setMaxConcurrentResolvers(m_concurrencySpin->value());
     m_controller.start(runEntries, m_sampleSpin->value(), m_delaySpin->value(), loadDomains());
 }
 
@@ -1176,6 +1185,7 @@ void MainWindow::startBenchmarkForResolver(const ResolverEntry& entry)
     m_resultsTab->setSummary(QStringLiteral("Benchmark running for %1...").arg(runEntry.effectiveName()));
     appendLogLine(QStringLiteral("Starting single-resolver benchmark for %1.").arg(runEntry.effectiveName()));
     m_controller.setVerboseLogging(m_verboseLogToggle->isChecked());
+    m_controller.setMaxConcurrentResolvers(m_concurrencySpin->value());
     m_controller.start({runEntry}, m_sampleSpin->value(), m_delaySpin->value(), loadDomains());
 }
 
@@ -1458,6 +1468,7 @@ void MainWindow::loadSettings()
     restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
     m_sampleSpin->setValue(settings.value(QStringLiteral("benchmark/sampleCount"), 250).toInt());
     m_delaySpin->setValue(settings.value(QStringLiteral("benchmark/interQueryDelayMs"), 50).toInt());
+    m_concurrencySpin->setValue(settings.value(QStringLiteral("benchmark/maxConcurrentResolvers"), 20).toInt());
     m_ipv4Toggle->setChecked(settings.value(QStringLiteral("protocols/ipv4"), true).toBool());
     m_ipv6Toggle->setChecked(settings.value(QStringLiteral("protocols/ipv6"), true).toBool());
     m_dohToggle->setChecked(settings.value(QStringLiteral("protocols/doh"), true).toBool());
@@ -1494,6 +1505,7 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("window/geometry"), saveGeometry());
     settings.setValue(QStringLiteral("benchmark/sampleCount"), m_sampleSpin->value());
     settings.setValue(QStringLiteral("benchmark/interQueryDelayMs"), m_delaySpin->value());
+    settings.setValue(QStringLiteral("benchmark/maxConcurrentResolvers"), m_concurrencySpin->value());
     settings.setValue(QStringLiteral("protocols/ipv4"), m_ipv4Toggle->isChecked());
     settings.setValue(QStringLiteral("protocols/ipv6"), m_ipv6Toggle->isChecked());
     settings.setValue(QStringLiteral("protocols/doh"), m_dohToggle->isChecked());
