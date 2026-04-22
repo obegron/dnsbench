@@ -48,6 +48,7 @@ private:
     void addBuiltInResolvers();
     void restoreBuiltInResolvers();
     void addResolver();
+    void importResolvers();
     void startBenchmark();
     void startBenchmarkForResolver(const ResolverEntry& entry);
     void stopBenchmark();

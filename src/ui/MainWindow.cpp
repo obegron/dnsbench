@@ -14,8 +14,13 @@
 #include <QDialog>
 #include <QFile>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QHostAddress>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QMenuBar>
 #include <QMenu>
@@ -25,6 +30,7 @@
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QSet>
 #include <QSortFilterProxyModel>
@@ -39,6 +45,7 @@
 #include <QTextBrowser>
 #include <QTextDocument>
 #include <QToolBar>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -303,6 +310,513 @@ QList<ResolverEntry> builtInResolvers()
     };
 }
 
+struct ImportResult {
+    QList<ResolverEntry> entries;
+    int skipped = 0;
+    QStringList warnings;
+};
+
+QString normalizedColumnName(QString value)
+{
+    value = value.trimmed().toLower();
+    value.remove(QRegularExpression(QStringLiteral("[^a-z0-9]")));
+    return value;
+}
+
+bool parseLooseProtocol(const QString& value, ResolverProtocol* protocol)
+{
+    QString normalized = value.trimmed().toLower();
+    normalized.remove(QString::fromUtf8("\xf0\x9f\x8c\x90"));
+    normalized.remove(QString::fromUtf8("\xf0\x9f\x94\x92"));
+    normalized = normalized.trimmed();
+    if (normalized.contains(QStringLiteral("ipv4"))) {
+        if (protocol) {
+            *protocol = ResolverProtocol::IPv4;
+        }
+        return true;
+    }
+    if (normalized.contains(QStringLiteral("ipv6"))) {
+        if (protocol) {
+            *protocol = ResolverProtocol::IPv6;
+        }
+        return true;
+    }
+    if (normalized == QLatin1String("doh") || normalized.contains(QStringLiteral("https"))) {
+        if (protocol) {
+            *protocol = ResolverProtocol::DoH;
+        }
+        return true;
+    }
+    if (normalized == QLatin1String("dot") || normalized.contains(QStringLiteral("tls"))) {
+        if (protocol) {
+            *protocol = ResolverProtocol::DoT;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool parseBoolToken(const QString& value, bool fallback)
+{
+    const QString normalized = value.trimmed().toLower();
+    if (normalized == QLatin1String("1") || normalized == QLatin1String("true")
+        || normalized == QLatin1String("yes") || normalized == QLatin1String("on")
+        || normalized == QLatin1String("checked")) {
+        return true;
+    }
+    if (normalized == QLatin1String("0") || normalized == QLatin1String("false")
+        || normalized == QLatin1String("no") || normalized == QLatin1String("off")
+        || normalized == QLatin1String("unchecked")) {
+        return false;
+    }
+    return fallback;
+}
+
+bool isLikelyHostname(const QString& value)
+{
+    static const QRegularExpression pattern(QStringLiteral("^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$"));
+    return value.contains(QLatin1Char('.')) && pattern.match(value).hasMatch();
+}
+
+bool splitAddressPort(QString* address, int* port)
+{
+    QString value = address->trimmed();
+    const QRegularExpression bracketedIpv6(QStringLiteral("^\\[([^\\]]+)\\]:(\\d{1,5})$"));
+    const QRegularExpressionMatch bracketMatch = bracketedIpv6.match(value);
+    if (bracketMatch.hasMatch()) {
+        const int parsedPort = bracketMatch.captured(2).toInt();
+        if (parsedPort >= 1 && parsedPort <= 65535) {
+            *address = bracketMatch.captured(1);
+            *port = parsedPort;
+            return true;
+        }
+    }
+
+    if (value.count(QLatin1Char(':')) == 1) {
+        const int separator = value.lastIndexOf(QLatin1Char(':'));
+        bool ok = false;
+        const int parsedPort = value.mid(separator + 1).toInt(&ok);
+        if (ok && parsedPort >= 1 && parsedPort <= 65535) {
+            *address = value.left(separator);
+            *port = parsedPort;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool inferProtocol(const QString& address, ResolverProtocol* protocol)
+{
+    const QString trimmed = address.trimmed();
+    const QUrl url(trimmed);
+    if (url.isValid() && (url.scheme() == QLatin1String("https") || url.scheme() == QLatin1String("http")) && !url.host().isEmpty()) {
+        if (protocol) {
+            *protocol = ResolverProtocol::DoH;
+        }
+        return true;
+    }
+
+    QHostAddress host;
+    if (host.setAddress(trimmed)) {
+        if (protocol) {
+            *protocol = host.protocol() == QAbstractSocket::IPv6Protocol ? ResolverProtocol::IPv6 : ResolverProtocol::IPv4;
+        }
+        return true;
+    }
+
+    if (trimmed.contains(QLatin1Char('/')) || trimmed.contains(QStringLiteral("dns-query"))) {
+        if (protocol) {
+            *protocol = ResolverProtocol::DoH;
+        }
+        return true;
+    }
+
+    if (isLikelyHostname(trimmed)) {
+        if (protocol) {
+            *protocol = ResolverProtocol::DoT;
+        }
+        return true;
+    }
+
+    return false;
+}
+
+bool normalizeImportedResolver(ResolverEntry* entry, QString* reason)
+{
+    entry->displayName = entry->displayName.trimmed();
+    entry->address = entry->address.trimmed();
+    if (entry->address.isEmpty()) {
+        if (reason) {
+            *reason = QStringLiteral("missing address");
+        }
+        return false;
+    }
+
+    splitAddressPort(&entry->address, &entry->port);
+    if (entry->port <= 0 || entry->port > 65535) {
+        entry->port = defaultPortForProtocol(entry->protocol);
+    }
+
+    if (entry->protocol == ResolverProtocol::IPv4 || entry->protocol == ResolverProtocol::IPv6) {
+        QHostAddress host;
+        if (!host.setAddress(entry->address)) {
+            if (reason) {
+                *reason = QStringLiteral("UDP resolvers must be IP addresses");
+            }
+            return false;
+        }
+        if (entry->protocol == ResolverProtocol::IPv4 && host.protocol() != QAbstractSocket::IPv4Protocol) {
+            if (reason) {
+                *reason = QStringLiteral("address is not IPv4");
+            }
+            return false;
+        }
+        if (entry->protocol == ResolverProtocol::IPv6 && host.protocol() != QAbstractSocket::IPv6Protocol) {
+            if (reason) {
+                *reason = QStringLiteral("address is not IPv6");
+            }
+            return false;
+        }
+    } else if (entry->protocol == ResolverProtocol::DoH) {
+        QUrl url(entry->address.contains(QStringLiteral("://"))
+                ? entry->address
+                : QStringLiteral("https://%1/dns-query").arg(entry->address));
+        if (!url.isValid() || url.host().isEmpty()) {
+            if (reason) {
+                *reason = QStringLiteral("invalid DoH URL or host");
+            }
+            return false;
+        }
+    } else if (entry->protocol == ResolverProtocol::DoT) {
+        QHostAddress host;
+        if (!host.setAddress(entry->address) && !isLikelyHostname(entry->address)) {
+            if (reason) {
+                *reason = QStringLiteral("invalid DoT IP address or hostname");
+            }
+            return false;
+        }
+    }
+
+    entry->systemResolver = false;
+    entry->builtInResolver = false;
+    entry->status = ResolverStatus::Idle;
+    entry->stats = {};
+    entry->samples.clear();
+    entry->dnssecAuthenticatedDataSeen = false;
+    entry->id = ResolverModel::makeId(*entry);
+    return true;
+}
+
+QStringList splitDelimitedLine(const QString& line, QChar delimiter)
+{
+    QStringList values;
+    QString current;
+    bool quoted = false;
+    for (int i = 0; i < line.size(); ++i) {
+        const QChar ch = line.at(i);
+        if (ch == QLatin1Char('"')) {
+            if (quoted && i + 1 < line.size() && line.at(i + 1) == QLatin1Char('"')) {
+                current.append(ch);
+                ++i;
+            } else {
+                quoted = !quoted;
+            }
+            continue;
+        }
+        if (ch == delimiter && !quoted) {
+            values.push_back(current.trimmed());
+            current.clear();
+            continue;
+        }
+        current.append(ch);
+    }
+    values.push_back(current.trimmed());
+    return values;
+}
+
+QStringList splitMarkdownRow(QString line)
+{
+    line = line.trimmed();
+    if (line.startsWith(QLatin1Char('|'))) {
+        line.remove(0, 1);
+    }
+    if (line.endsWith(QLatin1Char('|'))) {
+        line.chop(1);
+    }
+
+    QStringList values;
+    QString current;
+    bool escaped = false;
+    for (const QChar ch : line) {
+        if (escaped) {
+            current.append(ch);
+            escaped = false;
+            continue;
+        }
+        if (ch == QLatin1Char('\\')) {
+            escaped = true;
+            continue;
+        }
+        if (ch == QLatin1Char('|')) {
+            values.push_back(current.trimmed());
+            current.clear();
+            continue;
+        }
+        current.append(ch);
+    }
+    values.push_back(current.trimmed());
+    return values;
+}
+
+QChar delimiterForLine(const QString& line)
+{
+    if (line.contains(QLatin1Char('\t'))) {
+        return QLatin1Char('\t');
+    }
+    if (line.contains(QLatin1Char(';')) && !line.contains(QLatin1Char(','))) {
+        return QLatin1Char(';');
+    }
+    return QLatin1Char(',');
+}
+
+bool looksLikeHeader(const QStringList& values)
+{
+    bool hasAddress = false;
+    bool hasProtocol = false;
+    for (const QString& value : values) {
+        const QString normalized = normalizedColumnName(value);
+        hasAddress = hasAddress || normalized == QLatin1String("address")
+            || normalized == QLatin1String("url") || normalized == QLatin1String("host")
+            || normalized == QLatin1String("resolver") || normalized == QLatin1String("addressurl");
+        hasProtocol = hasProtocol || normalized == QLatin1String("protocol")
+            || normalized == QLatin1String("proto") || normalized == QLatin1String("type");
+    }
+    return hasAddress || hasProtocol;
+}
+
+int columnIndex(const QHash<QString, int>& columns, std::initializer_list<const char*> names)
+{
+    for (const char* name : names) {
+        const auto it = columns.constFind(QString::fromLatin1(name));
+        if (it != columns.cend()) {
+            return it.value();
+        }
+    }
+    return -1;
+}
+
+QString valueAt(const QStringList& values, int index)
+{
+    return index >= 0 && index < values.size() ? values.at(index).trimmed() : QString();
+}
+
+bool resolverFromHeaderRow(const QStringList& values, const QHash<QString, int>& columns, ResolverEntry* entry)
+{
+    const int addressIndex = columnIndex(columns, {"address", "url", "host", "resolver", "addressurl"});
+    const QString address = valueAt(values, addressIndex);
+    if (address.isEmpty()) {
+        return false;
+    }
+
+    bool hasProtocol = false;
+    ResolverProtocol protocol = ResolverProtocol::IPv4;
+    const QString protocolText = valueAt(values, columnIndex(columns, {"protocol", "proto", "type"}));
+    if (!protocolText.isEmpty()) {
+        hasProtocol = parseLooseProtocol(protocolText, &protocol);
+    }
+    if (!hasProtocol && !inferProtocol(address, &protocol)) {
+        return false;
+    }
+
+    bool portOk = false;
+    const int port = valueAt(values, columnIndex(columns, {"port"})).toInt(&portOk);
+    entry->address = address;
+    entry->protocol = protocol;
+    entry->port = portOk ? port : defaultPortForProtocol(protocol);
+    entry->displayName = valueAt(values, columnIndex(columns, {"displayname", "name", "label"}));
+    entry->pinned = parseBoolToken(valueAt(values, columnIndex(columns, {"pin", "pinned"})), false);
+    entry->enabled = parseBoolToken(valueAt(values, columnIndex(columns, {"enabled"})), true);
+    return true;
+}
+
+bool resolverFromLooseRow(const QStringList& rawValues, ResolverEntry* entry)
+{
+    QStringList values;
+    for (const QString& value : rawValues) {
+        const QString trimmed = value.trimmed();
+        if (!trimmed.isEmpty()) {
+            values.push_back(trimmed);
+        }
+    }
+    if (values.isEmpty()) {
+        return false;
+    }
+
+    int protocolIndex = -1;
+    ResolverProtocol protocol = ResolverProtocol::IPv4;
+    for (int i = 0; i < values.size(); ++i) {
+        if (parseLooseProtocol(values.at(i), &protocol)) {
+            protocolIndex = i;
+            break;
+        }
+    }
+
+    int portIndex = -1;
+    int port = 0;
+    for (int i = 0; i < values.size(); ++i) {
+        if (i == protocolIndex) {
+            continue;
+        }
+        bool ok = false;
+        const int parsed = values.at(i).toInt(&ok);
+        if (ok && parsed >= 1 && parsed <= 65535) {
+            portIndex = i;
+            port = parsed;
+            break;
+        }
+    }
+
+    int addressIndex = -1;
+    ResolverProtocol inferredProtocol = ResolverProtocol::IPv4;
+    for (int i = 0; i < values.size(); ++i) {
+        if (i == protocolIndex || i == portIndex) {
+            continue;
+        }
+        ResolverProtocol candidateProtocol = ResolverProtocol::IPv4;
+        if (inferProtocol(values.at(i), &candidateProtocol)) {
+            addressIndex = i;
+            inferredProtocol = candidateProtocol;
+            break;
+        }
+    }
+    if (addressIndex < 0) {
+        return false;
+    }
+
+    if (protocolIndex < 0) {
+        protocol = inferredProtocol;
+    }
+
+    QStringList nameParts;
+    for (int i = 0; i < values.size(); ++i) {
+        if (i != addressIndex && i != protocolIndex && i != portIndex) {
+            nameParts.push_back(values.at(i));
+        }
+    }
+
+    entry->address = values.at(addressIndex);
+    entry->protocol = protocol;
+    entry->port = portIndex >= 0 ? port : defaultPortForProtocol(protocol);
+    entry->displayName = nameParts.join(QStringLiteral(" ")).trimmed();
+    entry->enabled = true;
+    entry->pinned = false;
+    return true;
+}
+
+ImportResult parseResolverImport(const QByteArray& content)
+{
+    ImportResult result;
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(content, &parseError);
+    QJsonArray array;
+    bool hasJsonResolverArray = false;
+    if (parseError.error == QJsonParseError::NoError && document.isArray()) {
+        array = document.array();
+        hasJsonResolverArray = true;
+    } else if (parseError.error == QJsonParseError::NoError && document.isObject()
+        && document.object().value(QStringLiteral("resolvers")).isArray()) {
+        array = document.object().value(QStringLiteral("resolvers")).toArray();
+        hasJsonResolverArray = true;
+    }
+    if (hasJsonResolverArray) {
+        for (int i = 0; i < array.size(); ++i) {
+            if (!array.at(i).isObject()) {
+                ++result.skipped;
+                continue;
+            }
+            const QJsonObject object = array.at(i).toObject();
+            ResolverEntry entry;
+            entry.displayName = object.value(QStringLiteral("displayName")).toString(object.value(QStringLiteral("name")).toString());
+            entry.address = object.value(QStringLiteral("address")).toString(object.value(QStringLiteral("url")).toString());
+            ResolverProtocol protocol = ResolverProtocol::IPv4;
+            if (!parseLooseProtocol(object.value(QStringLiteral("protocol")).toString(), &protocol)
+                && !inferProtocol(entry.address, &protocol)) {
+                ++result.skipped;
+                result.warnings.push_back(QStringLiteral("JSON row %1 skipped: missing or unknown protocol.").arg(i + 1));
+                continue;
+            }
+            entry.protocol = protocol;
+            entry.port = object.value(QStringLiteral("port")).toInt(defaultPortForProtocol(protocol));
+            entry.pinned = object.value(QStringLiteral("pinned")).toBool(false);
+            entry.enabled = object.value(QStringLiteral("enabled")).toBool(true);
+
+            QString reason;
+            if (normalizeImportedResolver(&entry, &reason)) {
+                result.entries.push_back(entry);
+            } else {
+                ++result.skipped;
+                result.warnings.push_back(QStringLiteral("JSON row %1 skipped: %2.").arg(i + 1).arg(reason));
+            }
+        }
+        return result;
+    }
+    const QString text = QString::fromUtf8(content);
+    QStringList header;
+    QHash<QString, int> columns;
+    int lineNumber = 0;
+
+    for (QString line : text.split(QLatin1Char('\n'))) {
+        ++lineNumber;
+        line = line.trimmed();
+        if (line.isEmpty() || line.startsWith(QLatin1Char('#'))) {
+            continue;
+        }
+
+        QStringList values;
+        if (line.startsWith(QLatin1Char('|'))) {
+            values = splitMarkdownRow(line);
+            bool separator = true;
+            for (const QString& value : values) {
+                separator = separator && value.contains(QLatin1String("---"));
+            }
+            if (separator) {
+                continue;
+            }
+        } else {
+            values = splitDelimitedLine(line, delimiterForLine(line));
+        }
+
+        if (header.isEmpty() && looksLikeHeader(values)) {
+            header = values;
+            for (int i = 0; i < header.size(); ++i) {
+                columns.insert(normalizedColumnName(header.at(i)), i);
+            }
+            continue;
+        }
+
+        ResolverEntry entry;
+        const bool parsed = !header.isEmpty()
+            ? resolverFromHeaderRow(values, columns, &entry)
+            : resolverFromLooseRow(values, &entry);
+        if (!parsed) {
+            ++result.skipped;
+            continue;
+        }
+
+        QString reason;
+        if (normalizeImportedResolver(&entry, &reason)) {
+            result.entries.push_back(entry);
+        } else {
+            ++result.skipped;
+            if (result.warnings.size() < 8) {
+                result.warnings.push_back(QStringLiteral("Line %1 skipped: %2.").arg(lineNumber).arg(reason));
+            }
+        }
+    }
+
+    return result;
+}
+
 bool isBuiltInResolverName(const QString& displayName)
 {
     static const QSet<QString> names = [] {
@@ -418,6 +932,8 @@ void MainWindow::buildUi()
     toolbar->addAction(QStringLiteral("Stop"), this, &MainWindow::stopBenchmark);
     toolbar->addSeparator();
     toolbar->addAction(QStringLiteral("Add Resolver"), this, &MainWindow::addResolver);
+    QAction* importAction = toolbar->addAction(QStringLiteral("Import"), this, &MainWindow::importResolvers);
+    importAction->setToolTip(QStringLiteral("Import resolvers from CSV, TSV, Markdown, JSON, or one resolver per line."));
     toolbar->addAction(QStringLiteral("Detect System DNS"), this, &MainWindow::detectSystemDns);
     toolbar->addAction(QStringLiteral("Restore Built-ins"), this, &MainWindow::restoreBuiltInResolvers);
     toolbar->addAction(QStringLiteral("Export"), this, &MainWindow::exportResults);
@@ -525,6 +1041,66 @@ void MainWindow::addResolver()
         return;
     }
     m_model.addResolver(entry);
+}
+
+void MainWindow::importResolvers()
+{
+    if (m_controller.isRunning()) {
+        QMessageBox::information(this, QStringLiteral("Benchmark Running"), QStringLiteral("Stop the current benchmark before importing resolvers."));
+        return;
+    }
+
+    const QString path = QFileDialog::getOpenFileName(
+        this,
+        QStringLiteral("Import Resolvers"),
+        QString(),
+        QStringLiteral("Resolver Lists (*.csv *.tsv *.txt *.md *.json);;All Files (*)"));
+    if (path.isEmpty()) {
+        return;
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, QStringLiteral("Import Failed"), file.errorString());
+        return;
+    }
+
+    ImportResult import = parseResolverImport(file.readAll());
+    QSet<QString> seen;
+    for (const ResolverEntry& entry : m_model.entries()) {
+        seen.insert(entry.id);
+    }
+
+    QList<ResolverEntry> toAdd;
+    toAdd.reserve(import.entries.size());
+    int duplicates = 0;
+    for (const ResolverEntry& entry : std::as_const(import.entries)) {
+        if (seen.contains(entry.id)) {
+            ++duplicates;
+            continue;
+        }
+        seen.insert(entry.id);
+        toAdd.push_back(entry);
+    }
+
+    if (!toAdd.isEmpty()) {
+        m_model.addResolvers(toAdd);
+    }
+
+    appendLogLine(QStringLiteral("Imported %1 resolver(s) from %2. Skipped %3 invalid row(s), %4 duplicate(s).")
+        .arg(toAdd.size())
+        .arg(QFileInfo(path).fileName())
+        .arg(import.skipped)
+        .arg(duplicates));
+
+    QString message = QStringLiteral("Imported %1 resolver(s).\nSkipped %2 invalid row(s), %3 duplicate(s).")
+        .arg(toAdd.size())
+        .arg(import.skipped)
+        .arg(duplicates);
+    if (!import.warnings.isEmpty()) {
+        message += QStringLiteral("\n\nFirst issues:\n%1").arg(import.warnings.join(QStringLiteral("\n")));
+    }
+    QMessageBox::information(this, QStringLiteral("Import Complete"), message);
 }
 
 void MainWindow::startBenchmark()
