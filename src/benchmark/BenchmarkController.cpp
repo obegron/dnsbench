@@ -173,7 +173,7 @@ private:
     QPointer<BenchmarkController> m_controller;
     ResolverEntry m_entry;
     int m_sampleCount = 0;
-    int m_interQueryDelayMs = 20;
+    int m_interQueryDelayMs = 50;
     QStringList m_domains;
     bool m_verboseLogging = false;
     std::shared_ptr<std::atomic_bool> m_cancelled;

@@ -38,7 +38,7 @@ private:
     QList<ResolverEntry> m_resolvers;
     QStringList m_domains;
     int m_sampleCount = 250;
-    int m_interQueryDelayMs = 20;
+    int m_interQueryDelayMs = 50;
     int m_completed = 0;
     int m_total = 0;
     int m_finishedResolvers = 0;

@@ -88,6 +88,11 @@ QString dnssecFor(const ResolverEntry& entry)
     return QStringLiteral("-");
 }
 
+bool includeInMarkdownTable(const ResolverEntry& entry)
+{
+    return entry.enabled && entry.status != ResolverStatus::Disabled;
+}
+
 bool saveText(const QString& path, const QString& content, QString* error)
 {
     QFile file(path);
@@ -139,6 +144,9 @@ QString ResultExporter::toTextTable(const QList<ResolverEntry>& entries)
     stream << "| Rank | Name | Address | Proto | Median | P90 | Mean | Stddev | Min | Max | Loss | DNSSEC | Status | Verdict |\n";
     stream << "|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n";
     for (const ResolverEntry& entry : entries) {
+        if (!includeInMarkdownTable(entry)) {
+            continue;
+        }
         const int rank = ranks.value(entry.id, 0);
         stream << "| "
                << (rank > 0 ? QString::number(rank) : QStringLiteral("-")) << " | "

@@ -36,6 +36,7 @@
 #include <QStyledItemDelegate>
 #include <QTabWidget>
 #include <QTableView>
+#include <QTextBrowser>
 #include <QTextDocument>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -422,7 +423,7 @@ void MainWindow::buildUi()
     toolbar->addWidget(new QLabel(QStringLiteral("Delay"), this));
     m_delaySpin = new QSpinBox(this);
     m_delaySpin->setRange(0, 5000);
-    m_delaySpin->setValue(20);
+    m_delaySpin->setValue(50);
     m_delaySpin->setSuffix(QStringLiteral(" ms"));
     m_delaySpin->setToolTip(QStringLiteral("Delay between queries sent by each resolver."));
     toolbar->addWidget(m_delaySpin);
@@ -578,15 +579,13 @@ void MainWindow::cloneResults()
     dialog->resize(1000, 500);
 
     const QString markdown = ResultExporter::toTextTable(m_model.entries());
-    auto* text = new QPlainTextEdit(markdown, dialog);
-    text->setReadOnly(true);
-    QFont monospace(QStringLiteral("monospace"));
-    monospace.setStyleHint(QFont::Monospace);
-    text->setFont(monospace);
+    auto* text = new QTextBrowser(dialog);
+    text->setOpenExternalLinks(false);
+    text->setMarkdown(markdown);
 
     auto* copyButton = new QPushButton(QStringLiteral("Copy Markdown"), dialog);
-    connect(copyButton, &QPushButton::clicked, dialog, [text]() {
-        QApplication::clipboard()->setText(text->toPlainText());
+    connect(copyButton, &QPushButton::clicked, dialog, [markdown]() {
+        QApplication::clipboard()->setText(markdown);
     });
 
     auto* controls = new QHBoxLayout();
@@ -827,7 +826,7 @@ void MainWindow::loadSettings()
     QSettings settings;
     restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
     m_sampleSpin->setValue(settings.value(QStringLiteral("benchmark/sampleCount"), 250).toInt());
-    m_delaySpin->setValue(settings.value(QStringLiteral("benchmark/interQueryDelayMs"), 20).toInt());
+    m_delaySpin->setValue(settings.value(QStringLiteral("benchmark/interQueryDelayMs"), 50).toInt());
     m_ipv4Toggle->setChecked(settings.value(QStringLiteral("protocols/ipv4"), true).toBool());
     m_ipv6Toggle->setChecked(settings.value(QStringLiteral("protocols/ipv6"), true).toBool());
     m_dohToggle->setChecked(settings.value(QStringLiteral("protocols/doh"), true).toBool());
