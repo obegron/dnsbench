@@ -5,6 +5,7 @@
 #include "benchmark/UdpResolver.h"
 
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QMetaObject>
 #include <QPointer>
@@ -76,6 +77,7 @@ public:
 
     void run() override
     {
+        m_progressPostTimer.start();
         if (isCancelled()) {
             postComplete();
             return;
@@ -114,7 +116,7 @@ public:
                 message += QStringLiteral(" Last error: %1.").arg(firstWarmupError);
             }
             postLog(message);
-            postProgress(m_sampleCount);
+            postProgress(m_sampleCount, true);
             postComplete();
             return;
         }
@@ -156,6 +158,7 @@ public:
                 sleepBetweenQueries();
             }
         }
+        postProgress(0, true);
 
         if (!isCancelled()) {
             const Statistics stats = Statistics::fromSamples(samples, m_sampleCount);
@@ -177,6 +180,8 @@ private:
     QStringList m_domains;
     bool m_verboseLogging = false;
     std::shared_ptr<std::atomic_bool> m_cancelled;
+    QElapsedTimer m_progressPostTimer;
+    int m_pendingProgressDelta = 0;
 
     bool isCancelled() const
     {
@@ -254,10 +259,21 @@ private:
         }
     }
 
-    void postProgress(int completedDelta)
+    void postProgress(int completedDelta, bool force = false)
     {
-        post([completedDelta](BenchmarkController* controller) {
-            controller->handleTaskProgress(completedDelta);
+        m_pendingProgressDelta += completedDelta;
+        if (m_pendingProgressDelta <= 0) {
+            return;
+        }
+        if (!force && m_progressPostTimer.isValid() && m_progressPostTimer.elapsed() < 100) {
+            return;
+        }
+
+        const int deltaToPost = m_pendingProgressDelta;
+        m_pendingProgressDelta = 0;
+        m_progressPostTimer.restart();
+        post([deltaToPost](BenchmarkController* controller) {
+            controller->handleTaskProgress(deltaToPost);
         });
     }
 
