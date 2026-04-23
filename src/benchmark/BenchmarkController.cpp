@@ -63,6 +63,7 @@ public:
         int interQueryDelayMs,
         QStringList domains,
         bool verboseLogging,
+        bool summaryLogging,
         std::shared_ptr<std::atomic_bool> cancelled)
         : m_controller(std::move(controller))
         , m_entry(std::move(entry))
@@ -70,6 +71,7 @@ public:
         , m_interQueryDelayMs(std::max(0, interQueryDelayMs))
         , m_domains(std::move(domains))
         , m_verboseLogging(verboseLogging)
+        , m_summaryLogging(summaryLogging)
         , m_cancelled(std::move(cancelled))
     {
         setAutoDelete(true);
@@ -84,7 +86,7 @@ public:
         }
 
         postStatus(ResolverStatus::Running);
-        postLog(QStringLiteral("Warming up %1 (%2).").arg(m_entry.effectiveName(), protocolToString(m_entry.protocol)));
+        postSummaryLog(QStringLiteral("Warming up %1 (%2).").arg(m_entry.effectiveName(), protocolToString(m_entry.protocol)));
 
         auto resolver = createResolverForThread(m_entry, warmupTimeoutForProtocol(m_entry.protocol));
         int successes = 0;
@@ -115,13 +117,13 @@ public:
             if (!firstWarmupError.isEmpty()) {
                 message += QStringLiteral(" Last error: %1.").arg(firstWarmupError);
             }
-            postLog(message);
+            postSummaryLog(message);
             postProgress(m_sampleCount, true);
             postComplete();
             return;
         }
 
-        postLog(QStringLiteral("Warm-up passed for %1: %2/%3 responses.")
+        postSummaryLog(QStringLiteral("Warm-up passed for %1: %2/%3 responses.")
                 .arg(m_entry.effectiveName())
                 .arg(successes)
                 .arg(warmupCount));
@@ -163,7 +165,7 @@ public:
         if (!isCancelled()) {
             const Statistics stats = Statistics::fromSamples(samples, m_sampleCount);
             postResolverFinished(stats, ResolverStatus::Finished, dnssecAuthenticatedDataSeen, samplePoints);
-            postLog(QStringLiteral("Finished %1: median %2 ms, loss %3%.")
+            postSummaryLog(QStringLiteral("Finished %1: median %2 ms, loss %3%.")
                     .arg(m_entry.effectiveName())
                     .arg(stats.medianMs, 0, 'f', 1)
                     .arg(stats.lossPercent, 0, 'f', 1));
@@ -179,6 +181,7 @@ private:
     int m_interQueryDelayMs = 50;
     QStringList m_domains;
     bool m_verboseLogging = false;
+    bool m_summaryLogging = true;
     std::shared_ptr<std::atomic_bool> m_cancelled;
     QElapsedTimer m_progressPostTimer;
     int m_pendingProgressDelta = 0;
@@ -255,6 +258,13 @@ private:
     void postVerboseLog(QString line)
     {
         if (m_verboseLogging) {
+            postLog(std::move(line));
+        }
+    }
+
+    void postSummaryLog(QString line)
+    {
+        if (m_summaryLogging || m_verboseLogging) {
             postLog(std::move(line));
         }
     }
@@ -338,6 +348,10 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
     emit progressUpdated(0, m_total, 0);
     emit logLine(QStringLiteral("Running up to %1 resolver(s) in parallel.").arg(m_threadPool.maxThreadCount()));
     emit logLine(QStringLiteral("Inter-query delay: %1 ms.").arg(m_interQueryDelayMs));
+    const bool summaryLogging = m_verboseLogging || m_resolvers.size() <= 250;
+    if (!summaryLogging) {
+        emit logLine(QStringLiteral("Per-resolver summary log lines suppressed for this large run. Enable Verbose Log to show every resolver."));
+    }
 
     if (m_resolvers.isEmpty()) {
         finishAll();
@@ -345,7 +359,7 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
     }
 
     for (const ResolverEntry& entry : std::as_const(m_resolvers)) {
-        m_threadPool.start(new ResolverBenchmarkTask(QPointer<BenchmarkController>(this), entry, m_sampleCount, m_interQueryDelayMs, m_domains, m_verboseLogging, m_cancelled));
+        m_threadPool.start(new ResolverBenchmarkTask(QPointer<BenchmarkController>(this), entry, m_sampleCount, m_interQueryDelayMs, m_domains, m_verboseLogging, summaryLogging, m_cancelled));
     }
 }
 

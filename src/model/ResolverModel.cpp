@@ -427,13 +427,19 @@ void ResolverModel::setResolverEnabled(const QString& id, bool enabled)
 
 void ResolverModel::setProtocolEnabled(ResolverProtocol protocol, bool enabled)
 {
+    bool changed = false;
     for (int row = 0; row < m_entries.size(); ++row) {
         if (m_entries[row].protocol != protocol) {
             continue;
         }
+        if (m_entries[row].enabled == enabled) {
+            continue;
+        }
         m_entries[row].enabled = enabled;
-        emit dataChanged(index(row, 0), index(row, ColumnCount - 1));
-        emit resolverChanged(m_entries[row]);
+        changed = true;
+    }
+    if (changed && !m_entries.isEmpty()) {
+        emit dataChanged(index(0, 0), index(m_entries.size() - 1, ColumnCount - 1));
     }
 }
 

@@ -55,11 +55,11 @@
 #include <cmath>
 #include <limits>
 #include <memory>
-#include <utility>
 
 namespace {
 
 constexpr int renderedMarkdownRowLimit = 250;
+constexpr int maxModelUpdatesPerFlush = 200;
 
 class PinnedSortProxyModel : public QSortFilterProxyModel {
 public:
@@ -1037,7 +1037,9 @@ void MainWindow::connectController()
     connect(&m_controller, &BenchmarkController::resolverStatusChanged, this, &MainWindow::queueResolverStatus);
     connect(&m_controller, &BenchmarkController::logLine, this, &MainWindow::appendLogLine);
     connect(&m_controller, &BenchmarkController::benchmarkFinished, this, [this]() {
-        flushPendingModelUpdates();
+        while (!m_pendingStatusUpdates.isEmpty() || !m_pendingResolverUpdates.isEmpty()) {
+            flushPendingModelUpdates();
+        }
         m_modelFlushTimer->stop();
         m_proxy->setDynamicSortFilter(true);
         m_proxy->sort(m_table->horizontalHeader()->sortIndicatorSection(), m_table->horizontalHeader()->sortIndicatorOrder());
@@ -1401,21 +1403,49 @@ void MainWindow::queueResolverStatus(const QString& resolverId, ResolverStatus s
 void MainWindow::flushPendingModelUpdates()
 {
     if (m_pendingStatusUpdates.isEmpty() && m_pendingResolverUpdates.isEmpty()) {
+        m_modelFlushTimer->stop();
         return;
     }
 
-    const QHash<QString, ResolverStatus> statusUpdates = std::exchange(m_pendingStatusUpdates, {});
-    const QHash<QString, PendingResolverUpdate> resolverUpdates = std::exchange(m_pendingResolverUpdates, {});
-
-    for (auto it = statusUpdates.cbegin(); it != statusUpdates.cend(); ++it) {
-        if (!resolverUpdates.contains(it.key())) {
-            m_model.updateStatus(it.key(), it.value());
+    int processed = 0;
+    const QStringList statusKeys = m_pendingStatusUpdates.keys();
+    for (const QString& resolverId : statusKeys) {
+        if (processed >= maxModelUpdatesPerFlush) {
+            break;
         }
+        const auto it = m_pendingStatusUpdates.constFind(resolverId);
+        if (it == m_pendingStatusUpdates.cend()) {
+            continue;
+        }
+        if (m_pendingResolverUpdates.contains(resolverId)) {
+            m_pendingStatusUpdates.remove(resolverId);
+            continue;
+        }
+        const ResolverStatus status = it.value();
+        m_pendingStatusUpdates.remove(resolverId);
+        m_model.updateStatus(resolverId, status);
+        ++processed;
     }
 
-    for (auto it = resolverUpdates.cbegin(); it != resolverUpdates.cend(); ++it) {
-        const PendingResolverUpdate& update = it.value();
-        m_model.updateStats(it.key(), update.stats, update.status, update.dnssecAuthenticatedDataSeen, update.samples);
+    const QStringList resolverKeys = m_pendingResolverUpdates.keys();
+    for (const QString& resolverId : resolverKeys) {
+        if (processed >= maxModelUpdatesPerFlush) {
+            break;
+        }
+        const auto it = m_pendingResolverUpdates.constFind(resolverId);
+        if (it == m_pendingResolverUpdates.cend()) {
+            continue;
+        }
+        const PendingResolverUpdate update = it.value();
+        m_pendingResolverUpdates.remove(resolverId);
+        m_model.updateStats(resolverId, update.stats, update.status, update.dnssecAuthenticatedDataSeen, update.samples);
+        ++processed;
+    }
+
+    if (m_pendingStatusUpdates.isEmpty() && m_pendingResolverUpdates.isEmpty()) {
+        m_modelFlushTimer->stop();
+    } else if (!m_modelFlushTimer->isActive()) {
+        m_modelFlushTimer->start();
     }
 }
 
