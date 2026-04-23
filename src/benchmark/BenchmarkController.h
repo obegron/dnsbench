@@ -7,6 +7,7 @@
 #include <QElapsedTimer>
 #include <QObject>
 #include <QThreadPool>
+#include <QTimer>
 
 #include <atomic>
 #include <memory>
@@ -46,10 +47,13 @@ private:
     bool m_running = false;
     bool m_verboseLogging = false;
     QThreadPool m_threadPool;
+    QTimer m_submitTimer;
     std::shared_ptr<std::atomic_bool> m_cancelled;
     QElapsedTimer m_elapsed;
+    int m_nextSubmitIndex = 0;
 
     void handleTaskProgress(int completedDelta);
     void handleTaskComplete();
+    void submitMoreResolvers();
     void finishAll();
 };

@@ -23,6 +23,7 @@ constexpr int fullQueryTimeoutMs = 5000;
 constexpr int encryptedWarmupTimeoutMs = 8000;
 constexpr int warmupCount = 10;
 constexpr int warmupSuccessThreshold = 3;
+constexpr int submitBatchSize = 128;
 
 bool requiresWarmup(ResolverProtocol protocol)
 {
@@ -324,6 +325,8 @@ BenchmarkController::BenchmarkController(QObject* parent)
     : QObject(parent)
 {
     m_threadPool.setMaxThreadCount(20);
+    m_submitTimer.setSingleShot(true);
+    connect(&m_submitTimer, &QTimer::timeout, this, &BenchmarkController::submitMoreResolvers);
 }
 
 void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampleCount, int interQueryDelayMs, QStringList domains)
@@ -339,10 +342,12 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
     }
 
     std::shuffle(m_domains.begin(), m_domains.end(), std::mt19937(QRandomGenerator::global()->generate()));
+    std::shuffle(m_resolvers.begin(), m_resolvers.end(), std::mt19937(QRandomGenerator::global()->generate()));
 
     m_completed = 0;
     m_finishedResolvers = 0;
     m_lastProgressEmitMs = 0;
+    m_nextSubmitIndex = 0;
     m_total = m_resolvers.size() * m_sampleCount;
     m_running = true;
     m_cancelled = std::make_shared<std::atomic_bool>(false);
@@ -361,9 +366,7 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
         return;
     }
 
-    for (const ResolverEntry& entry : std::as_const(m_resolvers)) {
-        m_threadPool.start(new ResolverBenchmarkTask(QPointer<BenchmarkController>(this), entry, m_sampleCount, m_interQueryDelayMs, m_domains, m_verboseLogging, summaryLogging, m_cancelled));
-    }
+    submitMoreResolvers();
 }
 
 void BenchmarkController::stop()
@@ -376,6 +379,7 @@ void BenchmarkController::stop()
     if (m_cancelled) {
         m_cancelled->store(true, std::memory_order_relaxed);
     }
+    m_submitTimer.stop();
     m_threadPool.clear();
     emit logLine(QStringLiteral("Benchmark stopped."));
     emit benchmarkFinished();
@@ -422,6 +426,32 @@ void BenchmarkController::handleTaskComplete()
     }
 }
 
+void BenchmarkController::submitMoreResolvers()
+{
+    if (!m_running) {
+        return;
+    }
+
+    const bool summaryLogging = m_verboseLogging || m_resolvers.size() <= 250;
+    const int endIndex = std::min(m_nextSubmitIndex + submitBatchSize, static_cast<int>(m_resolvers.size()));
+    for (; m_nextSubmitIndex < endIndex; ++m_nextSubmitIndex) {
+        const ResolverEntry& entry = m_resolvers.at(m_nextSubmitIndex);
+        m_threadPool.start(new ResolverBenchmarkTask(
+            QPointer<BenchmarkController>(this),
+            entry,
+            m_sampleCount,
+            m_interQueryDelayMs,
+            m_domains,
+            m_verboseLogging,
+            summaryLogging,
+            m_cancelled));
+    }
+
+    if (m_nextSubmitIndex < m_resolvers.size()) {
+        m_submitTimer.start(0);
+    }
+}
+
 void BenchmarkController::finishAll()
 {
     if (!m_running) {
@@ -432,6 +462,7 @@ void BenchmarkController::finishAll()
     if (m_cancelled) {
         m_cancelled->store(true, std::memory_order_relaxed);
     }
+    m_submitTimer.stop();
     emit progressUpdated(m_completed, m_total, m_elapsed.elapsed());
     emit logLine(QStringLiteral("Benchmark complete."));
     emit benchmarkFinished();
