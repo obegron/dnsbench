@@ -7,6 +7,7 @@
 #include <QElapsedTimer>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QRandomGenerator>
 #include <QSslError>
 #include <QStringList>
 #include <QTimer>
@@ -87,7 +88,7 @@ void DohResolver::query(const QString& domain, QueryCallback callback)
 {
     m_lastError.clear();
     m_lastAuthenticatedDataBit = false;
-    const quint16 transactionId = 0;
+    const quint16 transactionId = static_cast<quint16>(QRandomGenerator::global()->bounded(1, 0xffff));
     const QByteArray queryPacket = DnsPacket::buildQuery(domain, transactionId, 1);
     const QUrl url = endpoint();
     if (queryPacket.isEmpty()) {

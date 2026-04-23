@@ -17,14 +17,14 @@ void appendUInt16(QByteArray& out, quint16 value)
 QByteArray DnsPacket::buildQuery(const QString& domain, quint16 transactionId, quint16 qtype)
 {
     QByteArray packet;
-    packet.reserve(12 + domain.size() + 6);
+    packet.reserve(12 + domain.size() + 17);
 
     appendUInt16(packet, transactionId);
     appendUInt16(packet, 0x0100); // recursion desired
     appendUInt16(packet, 1);      // QDCOUNT
     appendUInt16(packet, 0);      // ANCOUNT
     appendUInt16(packet, 0);      // NSCOUNT
-    appendUInt16(packet, 0);      // ARCOUNT
+    appendUInt16(packet, 1);      // ARCOUNT (EDNS0 OPT)
 
     // This builds a raw DNS wire-format QNAME. The OS resolver and resolv.conf
     // search domains are not consulted, so benchmarks use the requested name.
@@ -41,6 +41,15 @@ QByteArray DnsPacket::buildQuery(const QString& domain, quint16 transactionId, q
     packet.append('\0');
     appendUInt16(packet, qtype);
     appendUInt16(packet, 1); // IN
+
+    // OPT pseudo-RR with DO=1 so validating resolvers can advertise DNSSEC state
+    // in the response, including the AD bit when appropriate.
+    packet.append('\0');         // NAME root
+    appendUInt16(packet, 41);    // TYPE OPT
+    appendUInt16(packet, 1232);  // UDP payload size
+    appendUInt16(packet, 0);     // EXTENDED-RCODE + VERSION
+    appendUInt16(packet, 0x8000); // DO bit
+    appendUInt16(packet, 0);     // RDLEN
 
     return packet;
 }

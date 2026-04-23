@@ -20,22 +20,21 @@
 namespace {
 
 constexpr int fullQueryTimeoutMs = 5000;
-constexpr int udpWarmupTimeoutMs = 1000;
 constexpr int encryptedWarmupTimeoutMs = 8000;
 constexpr int warmupCount = 10;
 constexpr int warmupSuccessThreshold = 3;
 
-int warmupTimeoutForProtocol(ResolverProtocol protocol)
+bool requiresWarmup(ResolverProtocol protocol)
 {
     switch (protocol) {
     case ResolverProtocol::DoH:
     case ResolverProtocol::DoT:
-        return encryptedWarmupTimeoutMs;
+        return true;
     case ResolverProtocol::IPv4:
     case ResolverProtocol::IPv6:
-        return udpWarmupTimeoutMs;
+        return false;
     }
-    return udpWarmupTimeoutMs;
+    return false;
 }
 
 std::unique_ptr<BaseResolver> createResolverForThread(const ResolverEntry& entry, int timeoutMs)
@@ -86,47 +85,51 @@ public:
         }
 
         postStatus(ResolverStatus::Running);
-        postSummaryLog(QStringLiteral("Warming up %1 (%2).").arg(m_entry.effectiveName(), protocolToString(m_entry.protocol)));
 
-        auto resolver = createResolverForThread(m_entry, warmupTimeoutForProtocol(m_entry.protocol));
-        int successes = 0;
-        QString firstWarmupError;
-        for (int i = 0; i < warmupCount && !isCancelled(); ++i) {
-            qint64 rttMs = 0;
-            QString error;
-            if (queryBlocking(resolver.get(), domainForSample(i), &rttMs, &error)) {
-                ++successes;
-            } else if (firstWarmupError.isEmpty()) {
-                firstWarmupError = error;
+        auto resolver = createResolverForThread(m_entry, fullQueryTimeoutMs);
+        if (requiresWarmup(m_entry.protocol)) {
+            postSummaryLog(QStringLiteral("Warming up %1 (%2).").arg(m_entry.effectiveName(), protocolToString(m_entry.protocol)));
+
+            resolver = createResolverForThread(m_entry, encryptedWarmupTimeoutMs);
+            int successes = 0;
+            QString firstWarmupError;
+            for (int i = 0; i < warmupCount && !isCancelled(); ++i) {
+                qint64 rttMs = 0;
+                QString error;
+                if (queryBlocking(resolver.get(), domainForSample(i), &rttMs, &error)) {
+                    ++successes;
+                } else if (firstWarmupError.isEmpty()) {
+                    firstWarmupError = error;
+                }
             }
-        }
 
-        if (isCancelled()) {
-            postComplete();
-            return;
-        }
+            if (isCancelled()) {
+                postComplete();
+                return;
+            }
 
-        if (successes < warmupSuccessThreshold) {
-            const Statistics stats = Statistics::fromSamples({}, m_sampleCount);
-            postStatus(ResolverStatus::Sidelined);
-            postResolverFinished(stats, ResolverStatus::Sidelined, false, {});
-            QString message = QStringLiteral("Sidelined %1: %2/%3 warm-up responses.")
+            if (successes < warmupSuccessThreshold) {
+                const Statistics stats = Statistics::fromSamples({}, m_sampleCount);
+                postStatus(ResolverStatus::Sidelined);
+                postResolverFinished(stats, ResolverStatus::Sidelined, false, {});
+                QString message = QStringLiteral("Sidelined %1: %2/%3 warm-up responses.")
                     .arg(m_entry.effectiveName())
                     .arg(successes)
                     .arg(warmupCount);
-            if (!firstWarmupError.isEmpty()) {
-                message += QStringLiteral(" Last error: %1.").arg(firstWarmupError);
+                if (!firstWarmupError.isEmpty()) {
+                    message += QStringLiteral(" Last error: %1.").arg(firstWarmupError);
+                }
+                postSummaryLog(message);
+                postProgress(m_sampleCount, true);
+                postComplete();
+                return;
             }
-            postSummaryLog(message);
-            postProgress(m_sampleCount, true);
-            postComplete();
-            return;
-        }
 
-        postSummaryLog(QStringLiteral("Warm-up passed for %1: %2/%3 responses.")
+            postSummaryLog(QStringLiteral("Warm-up passed for %1: %2/%3 responses.")
                 .arg(m_entry.effectiveName())
                 .arg(successes)
                 .arg(warmupCount));
+        }
 
         QVector<qint64> samples;
         samples.reserve(m_sampleCount);
