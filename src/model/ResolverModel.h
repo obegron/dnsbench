@@ -27,6 +27,10 @@ public:
         ColumnCount
     };
 
+    enum Role {
+        HasSamplesRole = Qt::UserRole + 1
+    };
+
     explicit ResolverModel(QObject* parent = nullptr);
 
     int rowCount(const QModelIndex& parent = QModelIndex()) const override;

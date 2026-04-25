@@ -23,8 +23,11 @@ constexpr int fullQueryTimeoutMs = 5000;
 constexpr int encryptedWarmupTimeoutMs = 8000;
 constexpr int warmupCount = 10;
 constexpr int warmupSuccessThreshold = 3;
-constexpr int submitBatchSize = 128;
+constexpr int submitBatchSize = 32;
 constexpr int maxStartJitterMs = 100;
+constexpr int defaultMaxConcurrentResolvers = 8;
+constexpr int hardMaxConcurrentResolvers = 64;
+constexpr int earlyNoResponseLimit = 3;
 
 bool requiresWarmup(ResolverProtocol protocol)
 {
@@ -161,6 +164,7 @@ public:
         QVector<ResolverSamplePoint> samplePoints;
         samplePoints.reserve(m_sampleCount);
         bool dnssecAuthenticatedDataSeen = false;
+        bool stoppedForNoResponse = false;
         resolver->setTimeoutMs(fullQueryTimeoutMs);
 
         for (int i = 0; i < m_sampleCount && !isCancelled(); ++i) {
@@ -182,6 +186,17 @@ public:
                 postVerboseLog(error.isEmpty()
                     ? QStringLiteral("Timeout/failure for %1 via %2.").arg(domain, m_entry.effectiveName())
                     : QStringLiteral("Failure for %1 via %2: %3.").arg(domain, m_entry.effectiveName(), error));
+                if (samples.isEmpty() && samplePoints.size() >= earlyNoResponseLimit) {
+                    stoppedForNoResponse = true;
+                    const int samplesToMarkComplete = m_sampleCount - i;
+                    if (samplesToMarkComplete > 0) {
+                        postProgress(samplesToMarkComplete, true);
+                    }
+                    postSummaryLog(QStringLiteral("Sidelined %1: no responses in the first %2 full-timeout queries.")
+                        .arg(m_entry.effectiveName())
+                        .arg(earlyNoResponseLimit));
+                    break;
+                }
             }
             postProgress(1);
             if (i + 1 < m_sampleCount) {
@@ -192,11 +207,14 @@ public:
 
         if (!isCancelled()) {
             const Statistics stats = Statistics::fromSamples(samples, m_sampleCount);
-            postResolverFinished(stats, ResolverStatus::Finished, dnssecAuthenticatedDataSeen, samplePoints);
-            postSummaryLog(QStringLiteral("Finished %1: median %2 ms, loss %3%.")
-                    .arg(m_entry.effectiveName())
-                    .arg(stats.medianMs, 0, 'f', 1)
-                    .arg(stats.lossPercent, 0, 'f', 1));
+            const ResolverStatus finalStatus = stoppedForNoResponse ? ResolverStatus::Sidelined : ResolverStatus::Finished;
+            postResolverFinished(stats, finalStatus, dnssecAuthenticatedDataSeen, samplePoints);
+            if (!stoppedForNoResponse) {
+                postSummaryLog(QStringLiteral("Finished %1: median %2 ms, loss %3%.")
+                        .arg(m_entry.effectiveName())
+                        .arg(stats.medianMs, 0, 'f', 1)
+                        .arg(stats.lossPercent, 0, 'f', 1));
+            }
         }
 
         postComplete();
@@ -364,7 +382,8 @@ private:
 BenchmarkController::BenchmarkController(QObject* parent)
     : QObject(parent)
 {
-    m_threadPool.setMaxThreadCount(20);
+    m_threadPool.setMaxThreadCount(defaultMaxConcurrentResolvers);
+    m_threadPool.setExpiryTimeout(-1);
     m_submitTimer.setSingleShot(true);
     connect(&m_submitTimer, &QTimer::timeout, this, &BenchmarkController::submitMoreResolvers);
 }
@@ -432,7 +451,7 @@ bool BenchmarkController::isRunning() const
 
 void BenchmarkController::setMaxConcurrentResolvers(int maxConcurrentResolvers)
 {
-    m_threadPool.setMaxThreadCount(std::max(1, maxConcurrentResolvers));
+    m_threadPool.setMaxThreadCount(std::clamp(maxConcurrentResolvers, 1, hardMaxConcurrentResolvers));
 }
 
 void BenchmarkController::setVerboseLogging(bool verboseLogging)

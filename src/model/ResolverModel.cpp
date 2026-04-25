@@ -177,6 +177,10 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
         }
     }
 
+    if (role == HasSamplesRole) {
+        return entry.stats.hasSamples();
+    }
+
     if (role == Qt::UserRole) {
         switch (column) {
         case PinColumn:
@@ -531,6 +535,22 @@ QVariant ResolverModel::statData(const Statistics& stats, Column column, int rol
     }
 
     const QLocale locale;
+    if (stats.successCount == 0) {
+        switch (column) {
+        case MedianColumn:
+        case P90Column:
+        case MeanColumn:
+        case StddevColumn:
+        case MinColumn:
+        case MaxColumn:
+            return role == Qt::DisplayRole ? QStringLiteral("-") : QVariant();
+        case LossColumn:
+            return locale.toString(stats.lossPercent, 'f', 1);
+        default:
+            return {};
+        }
+    }
+
     switch (column) {
     case MedianColumn:
         return locale.toString(stats.medianMs, 'f', 1);

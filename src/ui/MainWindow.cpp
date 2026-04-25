@@ -111,9 +111,10 @@ private:
     int sortRank(int sourceRow) const
     {
         const auto status = static_cast<ResolverStatus>(sourceModel()->index(sourceRow, ResolverModel::StatusColumn).data(Qt::UserRole).toInt());
+        const bool hasSamples = sourceModel()->index(sourceRow, ResolverModel::StatusColumn).data(ResolverModel::HasSamplesRole).toBool();
         switch (status) {
         case ResolverStatus::Finished:
-            return 0;
+            return hasSamples ? 0 : 3;
         case ResolverStatus::Running:
             return 1;
         case ResolverStatus::Sidelined:
@@ -121,9 +122,9 @@ private:
             return 2;
         case ResolverStatus::Idle:
         case ResolverStatus::Disabled:
-            return 3;
+            return 4;
         }
-        return 3;
+        return 4;
     }
 };
 
@@ -134,7 +135,7 @@ public:
     void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override
     {
         const auto status = static_cast<ResolverStatus>(index.sibling(index.row(), ResolverModel::StatusColumn).data(Qt::UserRole).toInt());
-        if (status != ResolverStatus::Finished) {
+        if (status != ResolverStatus::Finished || !index.data(ResolverModel::HasSamplesRole).toBool()) {
             QStyledItemDelegate::paint(painter, option, index);
             return;
         }
@@ -864,11 +865,16 @@ bool isBuiltInResolverName(const QString& displayName)
 
 bool isReliableResult(const ResolverEntry& entry)
 {
-    return entry.stats.lossPercent <= 1.0;
+    return entry.stats.hasSamples() && entry.stats.lossPercent <= 1.0;
 }
 
 bool resultLessThan(const ResolverEntry& left, const ResolverEntry& right)
 {
+    const bool leftHasSamples = left.stats.hasSamples();
+    const bool rightHasSamples = right.stats.hasSamples();
+    if (leftHasSamples != rightHasSamples) {
+        return leftHasSamples;
+    }
     const bool leftReliable = isReliableResult(left);
     const bool rightReliable = isReliableResult(right);
     if (leftReliable != rightReliable) {
@@ -1015,9 +1021,9 @@ void MainWindow::buildUi()
     toolbar->addSeparator();
     toolbar->addWidget(new QLabel(QStringLiteral("Concurrent"), this));
     m_concurrencySpin = new QSpinBox(this);
-    m_concurrencySpin->setRange(1, 500);
-    m_concurrencySpin->setValue(20);
-    m_concurrencySpin->setToolTip(QStringLiteral("Maximum number of resolvers benchmarked at the same time. Higher values finish large lists faster but can add network or resolver rate-limit noise."));
+    m_concurrencySpin->setRange(1, 64);
+    m_concurrencySpin->setValue(8);
+    m_concurrencySpin->setToolTip(QStringLiteral("Maximum number of resolvers benchmarked at the same time. Higher values finish large lists faster but create more worker threads and can add network or resolver rate-limit noise."));
     toolbar->addWidget(m_concurrencySpin);
 
     m_progress = new QProgressBar(this);
@@ -1616,7 +1622,7 @@ void MainWindow::loadSettings()
     restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
     m_sampleSpin->setValue(settings.value(QStringLiteral("benchmark/sampleCount"), 250).toInt());
     m_delaySpin->setValue(settings.value(QStringLiteral("benchmark/interQueryDelayMs"), 50).toInt());
-    m_concurrencySpin->setValue(settings.value(QStringLiteral("benchmark/maxConcurrentResolvers"), 20).toInt());
+    m_concurrencySpin->setValue(settings.value(QStringLiteral("benchmark/maxConcurrentResolvers"), 8).toInt());
     m_ipv4Toggle->setChecked(settings.value(QStringLiteral("protocols/ipv4"), true).toBool());
     m_ipv6Toggle->setChecked(settings.value(QStringLiteral("protocols/ipv6"), true).toBool());
     m_dohToggle->setChecked(settings.value(QStringLiteral("protocols/doh"), true).toBool());
