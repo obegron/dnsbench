@@ -16,6 +16,7 @@ public:
     void query(const QString& domain, QueryCallback callback) override;
     QString id() const override;
     void setTimeoutMs(int timeoutMs) override;
+    QString lastErrorString() const override;
     bool lastAuthenticatedDataBit() const override;
     void cancel() override;
 
@@ -27,6 +28,8 @@ private:
     QTimer m_timeout;
     QueryCallback m_callback;
     QElapsedTimer m_elapsed;
+    QString m_expectedDomain;
+    QString m_lastError;
     quint16 m_transactionId = 0;
     bool m_queryInFlight = false;
     bool m_lastAuthenticatedDataBit = false;

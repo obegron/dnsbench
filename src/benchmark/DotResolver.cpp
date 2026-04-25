@@ -3,6 +3,8 @@
 #include "benchmark/DnsPacket.h"
 
 #include <QRandomGenerator>
+#include <QSslError>
+#include <QStringList>
 #include <QtEndian>
 
 DotResolver::DotResolver(const ResolverEntry& entry, int timeoutMs, QObject* parent)
@@ -13,18 +15,28 @@ DotResolver::DotResolver(const ResolverEntry& entry, int timeoutMs, QObject* par
     m_timeout.setSingleShot(true);
     m_timeout.setInterval(m_timeoutMs);
     connect(&m_timeout, &QTimer::timeout, this, [this]() {
+        m_lastError = QStringLiteral("timeout after %1 ms").arg(m_timeoutMs);
         finish(0, false);
     });
 
     connect(&m_socket, &QSslSocket::errorOccurred, this, [this](QAbstractSocket::SocketError) {
         if (m_queryInFlight) {
+            m_lastError = m_socket.errorString();
             finish(0, false);
         }
     });
 
     connect(&m_socket, &QSslSocket::sslErrors, this, [this](const QList<QSslError>& errors) {
-        Q_UNUSED(errors);
-        m_socket.ignoreSslErrors();
+        QStringList messages;
+        messages.reserve(errors.size());
+        for (const QSslError& error : errors) {
+            messages.push_back(error.errorString());
+        }
+        m_lastError = QStringLiteral("TLS error: %1").arg(messages.join(QStringLiteral("; ")));
+        if (m_queryInFlight) {
+            m_socket.abort();
+            finish(0, false);
+        }
     });
 
     connect(&m_socket, &QSslSocket::readyRead, this, [this]() {
@@ -37,8 +49,11 @@ DotResolver::DotResolver(const ResolverEntry& entry, int timeoutMs, QObject* par
             return;
         }
         const QByteArray response = m_buffer.mid(2, length);
-        const bool valid = DnsPacket::isValidResponse(response, m_transactionId);
+        const bool valid = DnsPacket::isValidResponse(response, m_transactionId, m_expectedDomain, 1);
         m_lastAuthenticatedDataBit = valid && DnsPacket::authenticatedDataBit(response);
+        if (!valid && m_lastError.isEmpty()) {
+            m_lastError = QStringLiteral("invalid DNS response for %1").arg(m_expectedDomain);
+        }
         finish(valid ? m_elapsed.elapsed() : 0, valid);
     });
 }
@@ -54,6 +69,11 @@ void DotResolver::setTimeoutMs(int timeoutMs)
     m_timeout.setInterval(m_timeoutMs);
 }
 
+QString DotResolver::lastErrorString() const
+{
+    return m_lastError;
+}
+
 bool DotResolver::lastAuthenticatedDataBit() const
 {
     return m_lastAuthenticatedDataBit;
@@ -66,10 +86,13 @@ void DotResolver::query(const QString& domain, QueryCallback callback)
         return;
     }
 
+    m_lastError.clear();
     m_lastAuthenticatedDataBit = false;
     m_transactionId = static_cast<quint16>(QRandomGenerator::global()->bounded(1, 0xffff));
+    m_expectedDomain = domain;
     const QByteArray dnsPacket = DnsPacket::buildQuery(domain, m_transactionId, 1);
     if (dnsPacket.isEmpty()) {
+        m_lastError = QStringLiteral("could not build DNS query for %1").arg(domain);
         callback(0, false);
         return;
     }
@@ -94,6 +117,7 @@ void DotResolver::query(const QString& domain, QueryCallback callback)
 
 void DotResolver::cancel()
 {
+    m_lastError = QStringLiteral("cancelled");
     finish(0, false);
 }
 

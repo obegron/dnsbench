@@ -120,7 +120,7 @@ void DohResolver::query(const QString& domain, QueryCallback callback)
         m_lastError = QStringLiteral("TLS error: %1").arg(messages.join(QStringLiteral("; ")));
     });
 
-    QObject::connect(reply, &QNetworkReply::finished, reply, [this, reply, transactionId, elapsed, callback = std::move(callback)]() mutable {
+    QObject::connect(reply, &QNetworkReply::finished, reply, [this, reply, transactionId, domain, elapsed, callback = std::move(callback)]() mutable {
         const QByteArray payload = reply->readAll();
         const QVariant statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
         bool success = false;
@@ -131,7 +131,7 @@ void DohResolver::query(const QString& domain, QueryCallback callback)
                 .arg(resolutionHint(reply->url().host()));
         } else if (statusCode.isValid() && (statusCode.toInt() < 200 || statusCode.toInt() >= 300)) {
             m_lastError = QStringLiteral("HTTP %1 from %2").arg(statusCode.toInt()).arg(reply->url().toString());
-        } else if (!DnsPacket::isValidResponse(payload, transactionId)) {
+        } else if (!DnsPacket::isValidResponse(payload, transactionId, domain, 1)) {
             m_lastError = QStringLiteral("invalid DNS message response from %1: %2 bytes").arg(reply->url().toString()).arg(payload.size());
         } else {
             m_lastAuthenticatedDataBit = DnsPacket::authenticatedDataBit(payload);

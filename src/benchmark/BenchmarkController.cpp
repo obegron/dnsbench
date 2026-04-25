@@ -24,6 +24,7 @@ constexpr int encryptedWarmupTimeoutMs = 8000;
 constexpr int warmupCount = 10;
 constexpr int warmupSuccessThreshold = 3;
 constexpr int submitBatchSize = 128;
+constexpr int maxStartJitterMs = 100;
 
 bool requiresWarmup(ResolverProtocol protocol)
 {
@@ -52,6 +53,24 @@ std::unique_ptr<BaseResolver> createResolverForThread(const ResolverEntry& entry
     return std::make_unique<UdpResolver>(entry, timeoutMs);
 }
 
+int resolverDomainOffset(const ResolverEntry& entry, int resolverIndex, int domainCount)
+{
+    if (domainCount <= 1) {
+        return 0;
+    }
+    const uint hash = qHash(entry.id.isEmpty() ? entry.effectiveName() : entry.id);
+    return static_cast<int>((hash + static_cast<uint>(resolverIndex)) % static_cast<uint>(domainCount));
+}
+
+int resolverStartJitterMs(const ResolverEntry& entry, int resolverIndex, int resolverCount)
+{
+    if (resolverCount <= 1) {
+        return 0;
+    }
+    const uint hash = qHash(entry.id.isEmpty() ? entry.effectiveName() : entry.id);
+    return static_cast<int>((hash + static_cast<uint>(resolverIndex * 17)) % (maxStartJitterMs + 1));
+}
+
 }
 
 class ResolverBenchmarkTask final : public QRunnable {
@@ -62,6 +81,8 @@ public:
         int sampleCount,
         int interQueryDelayMs,
         QStringList domains,
+        int domainOffset,
+        int startJitterMs,
         bool verboseLogging,
         bool summaryLogging,
         std::shared_ptr<std::atomic_bool> cancelled)
@@ -70,6 +91,8 @@ public:
         , m_sampleCount(sampleCount)
         , m_interQueryDelayMs(std::max(0, interQueryDelayMs))
         , m_domains(std::move(domains))
+        , m_domainOffset(std::max(0, domainOffset))
+        , m_startJitterMs(std::clamp(startJitterMs, 0, maxStartJitterMs))
         , m_verboseLogging(verboseLogging)
         , m_summaryLogging(summaryLogging)
         , m_cancelled(std::move(cancelled))
@@ -85,6 +108,7 @@ public:
             return;
         }
 
+        sleepStartJitter();
         postStatus(ResolverStatus::Running);
 
         auto resolver = createResolverForThread(m_entry, fullQueryTimeoutMs);
@@ -184,6 +208,8 @@ private:
     int m_sampleCount = 0;
     int m_interQueryDelayMs = 50;
     QStringList m_domains;
+    int m_domainOffset = 0;
+    int m_startJitterMs = 0;
     bool m_verboseLogging = false;
     bool m_summaryLogging = true;
     std::shared_ptr<std::atomic_bool> m_cancelled;
@@ -197,7 +223,7 @@ private:
 
     QString domainForSample(int sampleIndex) const
     {
-        return m_domains.at(sampleIndex % m_domains.size());
+        return m_domains.at((sampleIndex + m_domainOffset) % m_domains.size());
     }
 
     bool queryBlocking(BaseResolver* resolver, const QString& domain, qint64* rttMs, QString* errorString)
@@ -236,6 +262,20 @@ private:
         int remainingMs = m_interQueryDelayMs;
         while (remainingMs > 0 && !isCancelled()) {
             const int sliceMs = std::min(remainingMs, 50);
+            QThread::msleep(static_cast<unsigned long>(sliceMs));
+            remainingMs -= sliceMs;
+        }
+    }
+
+    void sleepStartJitter()
+    {
+        if (m_startJitterMs <= 0) {
+            return;
+        }
+
+        int remainingMs = m_startJitterMs;
+        while (remainingMs > 0 && !isCancelled()) {
+            const int sliceMs = std::min(remainingMs, 25);
             QThread::msleep(static_cast<unsigned long>(sliceMs));
             remainingMs -= sliceMs;
         }
@@ -436,12 +476,16 @@ void BenchmarkController::submitMoreResolvers()
     const int endIndex = std::min(m_nextSubmitIndex + submitBatchSize, static_cast<int>(m_resolvers.size()));
     for (; m_nextSubmitIndex < endIndex; ++m_nextSubmitIndex) {
         const ResolverEntry& entry = m_resolvers.at(m_nextSubmitIndex);
+        const int domainOffset = resolverDomainOffset(entry, m_nextSubmitIndex, m_domains.size());
+        const int startJitterMs = resolverStartJitterMs(entry, m_nextSubmitIndex, m_resolvers.size());
         m_threadPool.start(new ResolverBenchmarkTask(
             QPointer<BenchmarkController>(this),
             entry,
             m_sampleCount,
             m_interQueryDelayMs,
             m_domains,
+            domainOffset,
+            startJitterMs,
             m_verboseLogging,
             summaryLogging,
             m_cancelled));
