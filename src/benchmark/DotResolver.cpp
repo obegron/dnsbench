@@ -106,9 +106,10 @@ void DotResolver::query(const QString& domain, QueryCallback callback)
         return;
     }
 
-    const auto connection = std::make_shared<QMetaObject::Connection>();
-    *connection = connect(&m_socket, &QSslSocket::encrypted, this, [this, dnsPacket, connection]() {
-        disconnect(*connection);
+    disconnect(m_encryptedConnection);
+    m_encryptedConnection = connect(&m_socket, &QSslSocket::encrypted, this, [this, dnsPacket]() {
+        disconnect(m_encryptedConnection);
+        m_encryptedConnection = {};
         sendCurrentQuery(dnsPacket);
     });
     m_timeout.start(m_timeoutMs);
@@ -146,6 +147,8 @@ void DotResolver::finish(qint64 rttMs, bool success)
     }
 
     m_timeout.stop();
+    disconnect(m_encryptedConnection);
+    m_encryptedConnection = {};
     m_queryInFlight = false;
     QueryCallback callback = std::move(m_callback);
     m_callback = {};

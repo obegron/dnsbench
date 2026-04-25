@@ -26,6 +26,7 @@ private:
     QSslSocket m_socket;
     QByteArray m_buffer;
     QTimer m_timeout;
+    QMetaObject::Connection m_encryptedConnection;
     QueryCallback m_callback;
     QElapsedTimer m_elapsed;
     QString m_expectedDomain;
