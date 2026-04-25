@@ -9,6 +9,7 @@
 #include <QSet>
 
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QPlainTextEdit;
 class QProgressBar;
@@ -40,6 +41,7 @@ private:
     QCheckBox* m_dohToggle = nullptr;
     QCheckBox* m_dotToggle = nullptr;
     QCheckBox* m_verboseLogToggle = nullptr;
+    QComboBox* m_resultFilterCombo = nullptr;
     ResultsTab* m_resultsTab = nullptr;
     QPlainTextEdit* m_log = nullptr;
     QTimer* m_modelFlushTimer = nullptr;
@@ -63,6 +65,7 @@ private:
     void importResolvers();
     void startBenchmark();
     void startBenchmarkForResolver(const ResolverEntry& entry);
+    void startBenchmarkForResolvers(const QList<ResolverEntry>& entries);
     void stopBenchmark();
     void exportResults();
     void cloneResults();

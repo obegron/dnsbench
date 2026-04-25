@@ -12,6 +12,7 @@
 #include <QCheckBox>
 #include <QDateTime>
 #include <QDialog>
+#include <QComboBox>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -59,13 +60,52 @@
 namespace {
 
 constexpr int renderedMarkdownRowLimit = 250;
-constexpr int maxModelUpdatesPerFlush = 200;
+constexpr int maxModelUpdatesPerFlush = 50;
+
+enum class ResultFilter {
+    All = 0,
+    ReliableOnly = 1,
+    UnreliableOnly = 2,
+    NoResultOnly = 3
+};
 
 class PinnedSortProxyModel : public QSortFilterProxyModel {
 public:
     using QSortFilterProxyModel::QSortFilterProxyModel;
 
+    void setResultFilter(ResultFilter filter)
+    {
+        if (m_resultFilter == filter) {
+            return;
+        }
+        beginFilterChange();
+        m_resultFilter = filter;
+        endFilterChange(QSortFilterProxyModel::Direction::Rows);
+    }
+
 protected:
+    bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const override
+    {
+        if (m_resultFilter == ResultFilter::All) {
+            return true;
+        }
+
+        const QModelIndex statusIndex = sourceModel()->index(sourceRow, ResolverModel::StatusColumn, sourceParent);
+        const int rank = resultRank(sourceRow, sourceParent);
+        switch (m_resultFilter) {
+        case ResultFilter::All:
+            return true;
+        case ResultFilter::ReliableOnly:
+            return rank == 0;
+        case ResultFilter::UnreliableOnly:
+            return rank == 1;
+        case ResultFilter::NoResultOnly:
+            return rank >= 3
+                || static_cast<ResolverStatus>(statusIndex.data(Qt::UserRole).toInt()) == ResolverStatus::Running;
+        }
+        return true;
+    }
+
     bool lessThan(const QModelIndex& left, const QModelIndex& right) const override
     {
         const bool leftPinned = sourceModel()->index(left.row(), ResolverModel::PinColumn).data(Qt::UserRole).toBool();
@@ -108,23 +148,37 @@ protected:
     }
 
 private:
-    int sortRank(int sourceRow) const
+    ResultFilter m_resultFilter = ResultFilter::All;
+
+    int resultRank(int sourceRow, const QModelIndex& sourceParent = {}) const
     {
-        const auto status = static_cast<ResolverStatus>(sourceModel()->index(sourceRow, ResolverModel::StatusColumn).data(Qt::UserRole).toInt());
-        const bool hasSamples = sourceModel()->index(sourceRow, ResolverModel::StatusColumn).data(ResolverModel::HasSamplesRole).toBool();
+        const QModelIndex statusIndex = sourceModel()->index(sourceRow, ResolverModel::StatusColumn, sourceParent);
+        const QModelIndex lossIndex = sourceModel()->index(sourceRow, ResolverModel::LossColumn, sourceParent);
+        const auto status = static_cast<ResolverStatus>(statusIndex.data(Qt::UserRole).toInt());
+        const bool hasSamples = statusIndex.data(ResolverModel::HasSamplesRole).toBool();
+        const double lossPercent = lossIndex.data(Qt::UserRole).toDouble();
+
         switch (status) {
         case ResolverStatus::Finished:
-            return hasSamples ? 0 : 3;
+            if (!hasSamples) {
+                return 4;
+            }
+            return lossPercent <= 1.0 ? 0 : 1;
         case ResolverStatus::Running:
-            return 1;
+            return 2;
         case ResolverStatus::Sidelined:
         case ResolverStatus::Failed:
-            return 2;
+            return 3;
         case ResolverStatus::Idle:
         case ResolverStatus::Disabled:
-            return 4;
+            return 5;
         }
-        return 4;
+        return 5;
+    }
+
+    int sortRank(int sourceRow) const
+    {
+        return resultRank(sourceRow);
     }
 };
 
@@ -1003,6 +1057,21 @@ void MainWindow::buildUi()
     toolbar->addWidget(m_verboseLogToggle);
 
     toolbar->addSeparator();
+    toolbar->addWidget(new QLabel(QStringLiteral("Show"), this));
+    m_resultFilterCombo = new QComboBox(this);
+    m_resultFilterCombo->addItem(QStringLiteral("All results"), static_cast<int>(ResultFilter::All));
+    m_resultFilterCombo->addItem(QStringLiteral("Reliable only"), static_cast<int>(ResultFilter::ReliableOnly));
+    m_resultFilterCombo->addItem(QStringLiteral("Unreliable only"), static_cast<int>(ResultFilter::UnreliableOnly));
+    m_resultFilterCombo->addItem(QStringLiteral("No result"), static_cast<int>(ResultFilter::NoResultOnly));
+    m_resultFilterCombo->setToolTip(QStringLiteral("Filter visible resolver rows by measured result quality."));
+    connect(m_resultFilterCombo, &QComboBox::currentIndexChanged, this, [this]() {
+        if (auto* proxy = dynamic_cast<PinnedSortProxyModel*>(m_proxy)) {
+            proxy->setResultFilter(static_cast<ResultFilter>(m_resultFilterCombo->currentData().toInt()));
+        }
+    });
+    toolbar->addWidget(m_resultFilterCombo);
+
+    toolbar->addSeparator();
     toolbar->addWidget(new QLabel(QStringLiteral("Samples"), this));
     m_sampleSpin = new QSpinBox(this);
     m_sampleSpin->setRange(1, 25000);
@@ -1202,26 +1271,53 @@ void MainWindow::startBenchmark()
 
 void MainWindow::startBenchmarkForResolver(const ResolverEntry& entry)
 {
+    startBenchmarkForResolvers({entry});
+}
+
+void MainWindow::startBenchmarkForResolvers(const QList<ResolverEntry>& entries)
+{
     if (m_controller.isRunning()) {
         QMessageBox::information(this, QStringLiteral("Benchmark Running"), QStringLiteral("Stop the current benchmark before starting another one."));
         return;
     }
 
-    ResolverEntry runEntry = entry;
-    runEntry.enabled = true;
+    QList<ResolverEntry> runEntries;
+    runEntries.reserve(entries.size());
+    QSet<QString> seen;
+    for (ResolverEntry entry : entries) {
+        if (entry.id.isEmpty() || seen.contains(entry.id)) {
+            continue;
+        }
+        entry.enabled = true;
+        seen.insert(entry.id);
+        runEntries.push_back(entry);
+    }
+
+    if (runEntries.isEmpty()) {
+        QMessageBox::information(this, QStringLiteral("No Resolvers"), QStringLiteral("No resolvers were selected for this benchmark."));
+        return;
+    }
+
     m_modelFlushTimer->stop();
     m_pendingResolverUpdates.clear();
     m_pendingStatusUpdates.clear();
     m_proxy->setDynamicSortFilter(false);
-    m_model.setResolverEnabled(runEntry.id, true);
-    m_model.resetRuntimeState(runEntry.id);
-    m_currentRunIds = {runEntry.id};
+    m_currentRunIds.clear();
+    for (const ResolverEntry& entry : std::as_const(runEntries)) {
+        m_model.setResolverEnabled(entry.id, true);
+        m_model.resetRuntimeState(entry.id);
+        m_currentRunIds.insert(entry.id);
+    }
     m_progress->setValue(0);
-    m_resultsTab->setSummary(QStringLiteral("Benchmark running for %1...").arg(runEntry.effectiveName()));
-    appendLogLine(QStringLiteral("Starting single-resolver benchmark for %1.").arg(runEntry.effectiveName()));
+    m_resultsTab->setSummary(runEntries.size() == 1
+            ? QStringLiteral("Benchmark running for %1...").arg(runEntries.first().effectiveName())
+            : QStringLiteral("Benchmark running for %1 selected resolvers...").arg(runEntries.size()));
+    appendLogLine(runEntries.size() == 1
+            ? QStringLiteral("Starting single-resolver benchmark for %1.").arg(runEntries.first().effectiveName())
+            : QStringLiteral("Starting selected-resolver benchmark for %1 resolvers.").arg(runEntries.size()));
     m_controller.setVerboseLogging(m_verboseLogToggle->isChecked());
     m_controller.setMaxConcurrentResolvers(m_concurrencySpin->value());
-    m_controller.start({runEntry}, m_sampleSpin->value(), m_delaySpin->value(), loadDomains());
+    m_controller.start(runEntries, m_sampleSpin->value(), m_delaySpin->value(), loadDomains());
 }
 
 void MainWindow::stopBenchmark()
@@ -1309,14 +1405,40 @@ void MainWindow::showResolverContextMenu(const QPoint& position)
         return;
     }
     const ResolverEntry entry = entries.at(sourceIndex.row());
+    QList<ResolverEntry> selectedEntries;
+    const QModelIndexList selectedRows = m_table->selectionModel()->selectedRows();
+    selectedEntries.reserve(selectedRows.size());
+    QSet<QString> selectedIds;
+    for (const QModelIndex& selectedProxyRow : selectedRows) {
+        const QModelIndex selectedSourceIndex = m_proxy->mapToSource(selectedProxyRow);
+        if (!selectedSourceIndex.isValid()
+            || selectedSourceIndex.row() < 0
+            || selectedSourceIndex.row() >= entries.size()) {
+            continue;
+        }
+        const ResolverEntry selectedEntry = entries.at(selectedSourceIndex.row());
+        if (selectedIds.contains(selectedEntry.id)) {
+            continue;
+        }
+        selectedIds.insert(selectedEntry.id);
+        selectedEntries.push_back(selectedEntry);
+    }
+    if (selectedEntries.isEmpty()) {
+        selectedEntries.push_back(entry);
+    }
 
     QMenu menu(this);
-    menu.addAction(QStringLiteral("Benchmark This Resolver"), this, [this, entry]() {
-        startBenchmarkForResolver(entry);
+    QAction* benchmarkAction = menu.addAction(selectedEntries.size() > 1
+            ? QStringLiteral("Benchmark Selected Resolvers (%1)").arg(selectedEntries.size())
+            : QStringLiteral("Benchmark This Resolver"),
+        this,
+        [this, selectedEntries]() {
+            startBenchmarkForResolvers(selectedEntries);
     });
-    const int selectedRows = m_table->selectionModel()->selectedRows().size();
-    QAction* removeAction = menu.addAction(selectedRows > 1
-            ? QStringLiteral("Remove Selected Resolvers (%1)").arg(selectedRows)
+    benchmarkAction->setEnabled(!m_controller.isRunning());
+    const int selectedRowCount = selectedEntries.size();
+    QAction* removeAction = menu.addAction(selectedRowCount > 1
+            ? QStringLiteral("Remove Selected Resolvers (%1)").arg(selectedRowCount)
             : QStringLiteral("Remove Resolver"),
         this,
         [this]() {
@@ -1628,6 +1750,9 @@ void MainWindow::loadSettings()
     m_dohToggle->setChecked(settings.value(QStringLiteral("protocols/doh"), true).toBool());
     m_dotToggle->setChecked(settings.value(QStringLiteral("protocols/dot"), true).toBool());
     m_verboseLogToggle->setChecked(settings.value(QStringLiteral("log/verbose"), false).toBool());
+    const int resultFilter = settings.value(QStringLiteral("results/filter"), static_cast<int>(ResultFilter::All)).toInt();
+    const int resultFilterIndex = m_resultFilterCombo->findData(resultFilter);
+    m_resultFilterCombo->setCurrentIndex(resultFilterIndex >= 0 ? resultFilterIndex : 0);
     const QStringList hiddenBuiltIns = settings.value(QStringLiteral("resolvers/hiddenBuiltIns")).toStringList();
     m_hiddenBuiltInResolverIds = QSet<QString>(hiddenBuiltIns.cbegin(), hiddenBuiltIns.cend());
 
@@ -1665,6 +1790,7 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("protocols/doh"), m_dohToggle->isChecked());
     settings.setValue(QStringLiteral("protocols/dot"), m_dotToggle->isChecked());
     settings.setValue(QStringLiteral("log/verbose"), m_verboseLogToggle->isChecked());
+    settings.setValue(QStringLiteral("results/filter"), m_resultFilterCombo->currentData().toInt());
     settings.setValue(QStringLiteral("resolvers/hiddenBuiltIns"), QStringList(m_hiddenBuiltInResolverIds.cbegin(), m_hiddenBuiltInResolverIds.cend()));
 
     const QList<ResolverEntry> entries = m_model.entries();

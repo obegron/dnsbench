@@ -172,8 +172,11 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
         if (!entry.enabled || entry.status == ResolverStatus::Disabled) {
             return QBrush(QColor(130, 130, 130));
         }
-        if (entry.status == ResolverStatus::Finished && entry.dnssecAuthenticatedDataSeen) {
-            return QBrush(QColor(76, 175, 103));
+        if (column == DnssecColumn
+            && entry.status == ResolverStatus::Finished
+            && entry.stats.hasSamples()
+            && entry.dnssecAuthenticatedDataSeen) {
+            return QBrush(QColor(25, 120, 55));
         }
     }
 
@@ -401,7 +404,8 @@ void ResolverModel::updateStats(const QString& id, const Statistics& stats, Reso
     m_entries[row].status = status;
     m_entries[row].dnssecAuthenticatedDataSeen = dnssecAuthenticatedDataSeen;
     m_entries[row].samples = samples;
-    emit dataChanged(index(row, 0), index(row, StatusColumn));
+    emit dataChanged(index(row, MedianColumn), index(row, StatusColumn),
+        {Qt::DisplayRole, Qt::UserRole, Qt::ForegroundRole, HasSamplesRole});
     emit resolverChanged(m_entries[row]);
 }
 
@@ -413,7 +417,8 @@ void ResolverModel::updateStatus(const QString& id, ResolverStatus status)
     }
 
     m_entries[row].status = status;
-    emit dataChanged(index(row, StatusColumn), index(row, StatusColumn));
+    emit dataChanged(index(row, StatusColumn), index(row, StatusColumn),
+        {Qt::DisplayRole, Qt::UserRole, Qt::ForegroundRole});
     emit resolverChanged(m_entries[row]);
 }
 
