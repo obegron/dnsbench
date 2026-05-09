@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QIcon>
 
 int main(int argc, char* argv[])
 {
@@ -9,6 +10,7 @@ int main(int argc, char* argv[])
     QCoreApplication::setOrganizationName(QStringLiteral("dnsbench"));
     QCoreApplication::setApplicationName(QStringLiteral("DNS Benchmark"));
     QCoreApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+    app.setWindowIcon(QIcon(QStringLiteral(":/dnsbench.svg")));
 
     qRegisterMetaType<Statistics>("Statistics");
     qRegisterMetaType<ResolverStatus>("ResolverStatus");

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DNS Benchmark
+Comment=Benchmark DNS resolvers
+Exec=dnsbench
+Icon=dnsbench
+Terminal=false
+Categories=Network;
+StartupNotify=true

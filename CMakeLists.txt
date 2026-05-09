@@ -75,6 +75,14 @@ install(TARGETS dnsbench
     RUNTIME DESTINATION bin
 )
 
+install(FILES packaging/linux/dnsbench.desktop
+    DESTINATION share/applications
+)
+
+install(FILES resources/dnsbench.svg
+    DESTINATION share/icons/hicolor/scalable/apps
+)
+
 enable_testing()
 
 qt_add_executable(test_statistics tests/test_statistics.cpp)

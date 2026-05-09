@@ -1,4 +1,6 @@
 build/
+pkg/
+*.pkg.tar.*
 *.user
 *.swp
 .DS_Store

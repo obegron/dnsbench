@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/">
+        <file>dnsbench.svg</file>
         <file>test_domains.txt</file>
     </qresource>
 </RCC>
