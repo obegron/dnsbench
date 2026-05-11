@@ -44,7 +44,7 @@ public:
     void addResolvers(const QList<ResolverEntry>& entries, bool prepend = false);
     void clear();
     void removeRowsByIndexes(const QModelIndexList& indexes);
-    void updateStats(const QString& id, const Statistics& stats, ResolverStatus status = ResolverStatus::Finished, bool dnssecAuthenticatedDataSeen = false, const QVector<ResolverSamplePoint>& samples = {});
+    void updateStats(const QString& id, const Statistics& stats, ResolverStatus status = ResolverStatus::Finished, bool dnssecAuthenticatedDataSeen = false, const QVector<ResolverSamplePoint>& samples = {}, const QVector<QVector<ResolverSamplePoint>>& passSamples = {});
     void updateStatus(const QString& id, ResolverStatus status);
     void setResolverEnabled(const QString& id, bool enabled);
     void setProtocolEnabled(ResolverProtocol protocol, bool enabled);

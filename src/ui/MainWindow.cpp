@@ -13,6 +13,7 @@
 #include <QDateTime>
 #include <QDialog>
 #include <QComboBox>
+#include <QEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -35,6 +36,7 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QSet>
+#include <QSignalBlocker>
 #include <QSortFilterProxyModel>
 #include <QSpinBox>
 #include <QSplitter>
@@ -46,8 +48,10 @@
 #include <QTableView>
 #include <QTextBrowser>
 #include <QTextDocument>
+#include <QTextStream>
 #include <QTimer>
 #include <QToolBar>
+#include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -68,6 +72,52 @@ enum class ResultFilter {
     UnreliableOnly = 2,
     NoResultOnly = 3
 };
+
+enum class BenchmarkProfile {
+    Conservative = 0,
+    HomeWifi = 1,
+    WiredLan = 2,
+    FastNetwork = 3,
+    Custom = 4
+};
+
+struct BenchmarkProfileSettings {
+    int delayMs = 100;
+    int concurrency = 1;
+};
+
+BenchmarkProfileSettings settingsForProfile(BenchmarkProfile profile)
+{
+    const int recommendedConcurrency = BenchmarkController::recommendedMaxConcurrentResolvers();
+    switch (profile) {
+    case BenchmarkProfile::Conservative:
+        return {200, 1};
+    case BenchmarkProfile::HomeWifi:
+        return {150, std::min(recommendedConcurrency, 2)};
+    case BenchmarkProfile::WiredLan:
+        return {100, std::min(recommendedConcurrency, 4)};
+    case BenchmarkProfile::FastNetwork:
+        return {50, 8};
+    case BenchmarkProfile::Custom:
+        break;
+    }
+    return {100, recommendedConcurrency};
+}
+
+BenchmarkProfile profileForSettings(int delayMs, int concurrency)
+{
+    for (BenchmarkProfile profile : {
+             BenchmarkProfile::Conservative,
+             BenchmarkProfile::HomeWifi,
+             BenchmarkProfile::WiredLan,
+             BenchmarkProfile::FastNetwork}) {
+        const BenchmarkProfileSettings candidate = settingsForProfile(profile);
+        if (candidate.delayMs == delayMs && candidate.concurrency == concurrency) {
+            return profile;
+        }
+    }
+    return BenchmarkProfile::Custom;
+}
 
 class PinnedSortProxyModel : public QSortFilterProxyModel {
 public:
@@ -98,7 +148,7 @@ protected:
         case ResultFilter::ReliableOnly:
             return rank == 0;
         case ResultFilter::UnreliableOnly:
-            return rank == 1;
+            return rank == 1 || hasLatencyOutliers(sourceRow, sourceParent);
         case ResultFilter::NoResultOnly:
             return rank >= 3
                 || static_cast<ResolverStatus>(statusIndex.data(Qt::UserRole).toInt()) == ResolverStatus::Running;
@@ -180,6 +230,22 @@ private:
     {
         return resultRank(sourceRow);
     }
+
+    bool hasLatencyOutliers(int sourceRow, const QModelIndex& sourceParent = {}) const
+    {
+        const QModelIndex statusIndex = sourceModel()->index(sourceRow, ResolverModel::StatusColumn, sourceParent);
+        if (!statusIndex.data(ResolverModel::HasSamplesRole).toBool()) {
+            return false;
+        }
+        const auto status = static_cast<ResolverStatus>(statusIndex.data(Qt::UserRole).toInt());
+        if (status != ResolverStatus::Finished) {
+            return false;
+        }
+        const double lossPercent = sourceModel()->index(sourceRow, ResolverModel::LossColumn, sourceParent).data(Qt::UserRole).toDouble();
+        const double medianMs = sourceModel()->index(sourceRow, ResolverModel::MedianColumn, sourceParent).data(Qt::UserRole).toDouble();
+        const double stddevMs = sourceModel()->index(sourceRow, ResolverModel::StddevColumn, sourceParent).data(Qt::UserRole).toDouble();
+        return lossPercent <= 1.0 && stddevMs > std::max(20.0, medianMs * 3.0);
+    }
 };
 
 class LatencyBarDelegate : public QStyledItemDelegate {
@@ -217,7 +283,7 @@ public:
         painter->setRenderHint(QPainter::Antialiasing, false);
         painter->fillRect(bar, QColor(235, 238, 241));
         painter->fillRect(QRect(bar.left(), bar.top(), fillWidth, bar.height()), fill);
-        painter->setPen(option.palette.text().color());
+        painter->setPen(QColor(33, 37, 43));
         painter->drawText(option.rect.adjusted(8, 0, -8, 0), Qt::AlignVCenter | Qt::AlignRight,
             QStringLiteral("%1 ms").arg(median, 0, 'f', 1));
         painter->restore();
@@ -328,45 +394,74 @@ private:
     }
 };
 
-ResolverEntry publicResolver(const QString& name, const QString& address, ResolverProtocol protocol, int port = 53)
+ResolverEntry publicResolver(
+    const QString& family,
+    const QString& name,
+    const QString& address,
+    ResolverProtocol protocol,
+    int port = -1,
+    const QString& notes = {})
 {
     ResolverEntry entry;
     entry.displayName = name;
     entry.address = address;
     entry.protocol = protocol;
-    entry.port = port;
+    entry.port = port > 0 ? port : defaultPortForProtocol(protocol);
     entry.builtInResolver = true;
+    entry.providerFamily = family;
+    entry.resolverNotes = notes;
     entry.id = ResolverModel::makeId(entry);
     return entry;
+}
+
+QString resolverPortDetailsLine(const ResolverEntry& entry)
+{
+    if (entry.protocol != ResolverProtocol::DoH) {
+        return QStringLiteral("Port: %1").arg(entry.port);
+    }
+
+    QUrl url(entry.address);
+    if (url.scheme().isEmpty()) {
+        url = QUrl(QStringLiteral("https://%1/dns-query").arg(entry.address));
+    }
+
+    const bool explicitPort = url.port() > 0;
+    const int defaultPort = url.scheme() == QLatin1String("http") ? 80 : 443;
+    const int effectivePort = url.port(defaultPort);
+    return explicitPort
+        ? QStringLiteral("Endpoint port: %1 (from URL)").arg(effectivePort)
+        : QStringLiteral("Endpoint port: %1 (%2 default)")
+              .arg(effectivePort)
+              .arg(url.scheme() == QLatin1String("http") ? QStringLiteral("HTTP") : QStringLiteral("HTTPS"));
 }
 
 QList<ResolverEntry> builtInResolvers()
 {
     return {
-        publicResolver(QStringLiteral("Cloudflare 1.1.1.1"), QStringLiteral("1.1.1.1"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Cloudflare 1.0.0.1"), QStringLiteral("1.0.0.1"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Cloudflare IPv6"), QStringLiteral("2606:4700:4700::1111"), ResolverProtocol::IPv6),
-        publicResolver(QStringLiteral("Cloudflare DoH"), QStringLiteral("https://cloudflare-dns.com/dns-query"), ResolverProtocol::DoH),
-        publicResolver(QStringLiteral("Cloudflare DoT"), QStringLiteral("1.1.1.1"), ResolverProtocol::DoT, 853),
-        publicResolver(QStringLiteral("Google 8.8.8.8"), QStringLiteral("8.8.8.8"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Google 8.8.4.4"), QStringLiteral("8.8.4.4"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Google IPv6"), QStringLiteral("2001:4860:4860::8888"), ResolverProtocol::IPv6),
-        publicResolver(QStringLiteral("Google DoH"), QStringLiteral("https://dns.google/dns-query"), ResolverProtocol::DoH),
-        publicResolver(QStringLiteral("Google DoT"), QStringLiteral("8.8.8.8"), ResolverProtocol::DoT, 853),
-        publicResolver(QStringLiteral("Quad9 9.9.9.9"), QStringLiteral("9.9.9.9"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Quad9 149.112.112.112"), QStringLiteral("149.112.112.112"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Quad9 IPv6"), QStringLiteral("2620:fe::fe"), ResolverProtocol::IPv6),
-        publicResolver(QStringLiteral("Quad9 DoH"), QStringLiteral("https://dns.quad9.net/dns-query"), ResolverProtocol::DoH),
-        publicResolver(QStringLiteral("Quad9 DoT"), QStringLiteral("9.9.9.9"), ResolverProtocol::DoT, 853),
-        publicResolver(QStringLiteral("OpenDNS 208.67.222.222"), QStringLiteral("208.67.222.222"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("OpenDNS 208.67.220.220"), QStringLiteral("208.67.220.220"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("AdGuard 94.140.14.14"), QStringLiteral("94.140.14.14"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("AdGuard 94.140.15.15"), QStringLiteral("94.140.15.15"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("AdGuard DoH"), QStringLiteral("https://dns.adguard-dns.com/dns-query"), ResolverProtocol::DoH),
-        publicResolver(QStringLiteral("AdGuard DoT"), QStringLiteral("94.140.14.14"), ResolverProtocol::DoT, 853),
-        publicResolver(QStringLiteral("Control D 76.76.2.0"), QStringLiteral("76.76.2.0"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Control D 76.76.10.0"), QStringLiteral("76.76.10.0"), ResolverProtocol::IPv4),
-        publicResolver(QStringLiteral("Control D DoH"), QStringLiteral("https://freedns.controld.com/p0"), ResolverProtocol::DoH),
+        publicResolver(QStringLiteral("Cloudflare"), QStringLiteral("Cloudflare 1.1.1.1"), QStringLiteral("1.1.1.1"), ResolverProtocol::IPv4, 53, QStringLiteral("General-purpose public resolver.")),
+        publicResolver(QStringLiteral("Cloudflare"), QStringLiteral("Cloudflare 1.0.0.1"), QStringLiteral("1.0.0.1"), ResolverProtocol::IPv4, 53, QStringLiteral("General-purpose public resolver.")),
+        publicResolver(QStringLiteral("Cloudflare"), QStringLiteral("Cloudflare IPv6"), QStringLiteral("2606:4700:4700::1111"), ResolverProtocol::IPv6, 53, QStringLiteral("General-purpose public resolver.")),
+        publicResolver(QStringLiteral("Cloudflare"), QStringLiteral("Cloudflare DoH"), QStringLiteral("https://cloudflare-dns.com/dns-query"), ResolverProtocol::DoH, 443, QStringLiteral("General-purpose encrypted resolver.")),
+        publicResolver(QStringLiteral("Cloudflare"), QStringLiteral("Cloudflare DoT"), QStringLiteral("1.1.1.1"), ResolverProtocol::DoT, 853, QStringLiteral("General-purpose encrypted resolver.")),
+        publicResolver(QStringLiteral("Google"), QStringLiteral("Google 8.8.8.8"), QStringLiteral("8.8.8.8"), ResolverProtocol::IPv4, 53, QStringLiteral("General-purpose public resolver.")),
+        publicResolver(QStringLiteral("Google"), QStringLiteral("Google 8.8.4.4"), QStringLiteral("8.8.4.4"), ResolverProtocol::IPv4, 53, QStringLiteral("General-purpose public resolver.")),
+        publicResolver(QStringLiteral("Google"), QStringLiteral("Google IPv6"), QStringLiteral("2001:4860:4860::8888"), ResolverProtocol::IPv6, 53, QStringLiteral("General-purpose public resolver.")),
+        publicResolver(QStringLiteral("Google"), QStringLiteral("Google DoH"), QStringLiteral("https://dns.google/dns-query"), ResolverProtocol::DoH, 443, QStringLiteral("General-purpose encrypted resolver.")),
+        publicResolver(QStringLiteral("Google"), QStringLiteral("Google DoT"), QStringLiteral("8.8.8.8"), ResolverProtocol::DoT, 853, QStringLiteral("General-purpose encrypted resolver.")),
+        publicResolver(QStringLiteral("Quad9"), QStringLiteral("Quad9 9.9.9.9"), QStringLiteral("9.9.9.9"), ResolverProtocol::IPv4, 53, QStringLiteral("Security-filtering resolver.")),
+        publicResolver(QStringLiteral("Quad9"), QStringLiteral("Quad9 149.112.112.112"), QStringLiteral("149.112.112.112"), ResolverProtocol::IPv4, 53, QStringLiteral("Security-filtering resolver.")),
+        publicResolver(QStringLiteral("Quad9"), QStringLiteral("Quad9 IPv6"), QStringLiteral("2620:fe::fe"), ResolverProtocol::IPv6, 53, QStringLiteral("Security-filtering resolver.")),
+        publicResolver(QStringLiteral("Quad9"), QStringLiteral("Quad9 DoH"), QStringLiteral("https://dns.quad9.net/dns-query"), ResolverProtocol::DoH, 443, QStringLiteral("Security-filtering encrypted resolver.")),
+        publicResolver(QStringLiteral("Quad9"), QStringLiteral("Quad9 DoT"), QStringLiteral("9.9.9.9"), ResolverProtocol::DoT, 853, QStringLiteral("Security-filtering encrypted resolver.")),
+        publicResolver(QStringLiteral("OpenDNS"), QStringLiteral("OpenDNS 208.67.222.222"), QStringLiteral("208.67.222.222"), ResolverProtocol::IPv4, 53, QStringLiteral("Cisco public resolver with security filtering.")),
+        publicResolver(QStringLiteral("OpenDNS"), QStringLiteral("OpenDNS 208.67.220.220"), QStringLiteral("208.67.220.220"), ResolverProtocol::IPv4, 53, QStringLiteral("Cisco public resolver with security filtering.")),
+        publicResolver(QStringLiteral("AdGuard"), QStringLiteral("AdGuard 94.140.14.14"), QStringLiteral("94.140.14.14"), ResolverProtocol::IPv4, 53, QStringLiteral("Ad/tracker blocking resolver.")),
+        publicResolver(QStringLiteral("AdGuard"), QStringLiteral("AdGuard 94.140.15.15"), QStringLiteral("94.140.15.15"), ResolverProtocol::IPv4, 53, QStringLiteral("Ad/tracker blocking resolver.")),
+        publicResolver(QStringLiteral("AdGuard"), QStringLiteral("AdGuard DoH"), QStringLiteral("https://dns.adguard-dns.com/dns-query"), ResolverProtocol::DoH, 443, QStringLiteral("Ad/tracker blocking encrypted resolver.")),
+        publicResolver(QStringLiteral("AdGuard"), QStringLiteral("AdGuard DoT"), QStringLiteral("94.140.14.14"), ResolverProtocol::DoT, 853, QStringLiteral("Ad/tracker blocking encrypted resolver.")),
+        publicResolver(QStringLiteral("Control D"), QStringLiteral("Control D 76.76.2.0"), QStringLiteral("76.76.2.0"), ResolverProtocol::IPv4, 53, QStringLiteral("Configurable filtering resolver; p0 is unfiltered.")),
+        publicResolver(QStringLiteral("Control D"), QStringLiteral("Control D 76.76.10.0"), QStringLiteral("76.76.10.0"), ResolverProtocol::IPv4, 53, QStringLiteral("Configurable filtering resolver; p0 is unfiltered.")),
+        publicResolver(QStringLiteral("Control D"), QStringLiteral("Control D DoH"), QStringLiteral("https://freedns.controld.com/p0"), ResolverProtocol::DoH, 443, QStringLiteral("Unfiltered encrypted resolver profile.")),
     };
 }
 
@@ -919,7 +1014,7 @@ bool isBuiltInResolverName(const QString& displayName)
 
 bool isReliableResult(const ResolverEntry& entry)
 {
-    return entry.stats.hasSamples() && entry.stats.lossPercent <= 1.0;
+    return resolverIsReliable(entry);
 }
 
 bool resultLessThan(const ResolverEntry& left, const ResolverEntry& right)
@@ -946,6 +1041,54 @@ bool resultLessThan(const ResolverEntry& left, const ResolverEntry& right)
     return left.stats.meanMs < right.stats.meanMs;
 }
 
+QVector<ResolverSamplePoint> combinePassSamples(const QVector<QVector<ResolverSamplePoint>>& passSamples)
+{
+    QVector<ResolverSamplePoint> combined;
+    int offset = 0;
+    for (int pass = 0; pass < passSamples.size(); ++pass) {
+        const QVector<ResolverSamplePoint>& samples = passSamples.at(pass);
+        combined.reserve(combined.size() + samples.size());
+        for (ResolverSamplePoint sample : samples) {
+            sample.passIndex = pass;
+            sample.sampleIndex = offset + sample.sampleIndex;
+            combined.push_back(sample);
+        }
+        offset += samples.size();
+    }
+    return combined;
+}
+
+Statistics aggregateStatsForPasses(const QVector<QVector<ResolverSamplePoint>>& passSamples, const QVector<Statistics>& passStats)
+{
+    QVector<qint64> rtts;
+    int expectedTotal = 0;
+    for (const Statistics& stats : passStats) {
+        expectedTotal += stats.totalCount;
+    }
+    for (const QVector<ResolverSamplePoint>& samples : passSamples) {
+        if (expectedTotal == 0) {
+            expectedTotal += samples.size();
+        }
+        for (const ResolverSamplePoint& sample : samples) {
+            if (sample.success) {
+                rtts.push_back(sample.rttMs);
+            }
+        }
+    }
+    return Statistics::fromSamples(rtts, expectedTotal);
+}
+
+QToolButton* addMenuButton(QToolBar* toolbar, const QString& text, QMenu* menu)
+{
+    auto* button = new QToolButton(toolbar);
+    button->setText(text);
+    button->setPopupMode(QToolButton::InstantPopup);
+    button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    button->setMenu(menu);
+    toolbar->addWidget(button);
+    return button;
+}
+
 }
 
 MainWindow::MainWindow(QWidget* parent)
@@ -961,6 +1104,74 @@ MainWindow::MainWindow(QWidget* parent)
 MainWindow::~MainWindow()
 {
     saveSettings();
+}
+
+void MainWindow::changeEvent(QEvent* event)
+{
+    QMainWindow::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange || event->type() == QEvent::StyleChange) {
+        applyToolbarTheme();
+    }
+}
+
+void MainWindow::applyToolbarTheme()
+{
+    if (QToolBar* toolbar = findChild<QToolBar*>(QStringLiteral("benchmarkToolbar"))) {
+        toolbar->setStyleSheet(QStringLiteral(R"css(
+            QToolBar#benchmarkToolbar {
+                background: palette(window);
+                color: palette(window-text);
+                border: 0;
+                border-bottom: 1px solid palette(mid);
+                spacing: 2px;
+                padding: 2px;
+            }
+            QToolBar#benchmarkToolbar QToolButton {
+                background: transparent;
+                color: palette(window-text);
+                border: 1px solid transparent;
+                border-radius: 3px;
+                padding: 4px 6px;
+            }
+            QToolBar#benchmarkToolbar QToolButton:hover {
+                background: palette(alternate-base);
+                border-color: palette(mid);
+            }
+            QToolBar#benchmarkToolbar QToolButton:pressed {
+                background: palette(highlight);
+                color: palette(highlighted-text);
+            }
+            QToolBar#benchmarkToolbar QLabel,
+            QToolBar#benchmarkToolbar QCheckBox {
+                color: palette(window-text);
+            }
+            QToolBar#benchmarkToolbar QComboBox,
+            QToolBar#benchmarkToolbar QSpinBox {
+                background: palette(base);
+                color: palette(text);
+                border: 1px solid palette(mid);
+                border-radius: 3px;
+                padding: 2px 4px;
+            }
+            QToolBar#benchmarkToolbar QComboBox::drop-down,
+            QToolBar#benchmarkToolbar QSpinBox::up-button,
+            QToolBar#benchmarkToolbar QSpinBox::down-button {
+                border: 0;
+                background: transparent;
+            }
+        )css"));
+    }
+}
+
+void MainWindow::updateRunAction()
+{
+    if (!m_runAction) {
+        return;
+    }
+    m_runAction->setText(m_controller.isRunning() ? QStringLiteral("Stop") : QStringLiteral("Start"));
+    m_runAction->setToolTip(m_controller.isRunning()
+            ? QStringLiteral("Stop the current benchmark")
+            : QStringLiteral("Start the benchmark"));
 }
 
 void MainWindow::buildUi()
@@ -990,6 +1201,7 @@ void MainWindow::buildUi()
     m_table->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_table, &QTableView::customContextMenuRequested, this, &MainWindow::showResolverContextMenu);
     connect(m_table, &QTableView::clicked, this, &MainWindow::openTimelineForIndex);
+    connect(m_table, &QTableView::doubleClicked, this, &MainWindow::showResolverDetailsForIndex);
     auto* removeSelectedAction = new QAction(QStringLiteral("Remove Selected Resolvers"), this);
     removeSelectedAction->setShortcut(QKeySequence::Delete);
     removeSelectedAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
@@ -1029,18 +1241,30 @@ void MainWindow::buildUi()
     setCentralWidget(splitter);
 
     auto* toolbar = addToolBar(QStringLiteral("Benchmark"));
+    toolbar->setObjectName(QStringLiteral("benchmarkToolbar"));
     toolbar->setMovable(false);
-    const QAction* startAction = toolbar->addAction(QStringLiteral("Start"), this, &MainWindow::startBenchmark);
-    Q_UNUSED(startAction);
-    toolbar->addAction(QStringLiteral("Stop"), this, &MainWindow::stopBenchmark);
+    toolbar->setIconSize(QSize(16, 16));
+    m_runAction = toolbar->addAction(QStringLiteral("Start"), this, [this]() {
+        if (m_controller.isRunning()) {
+            stopBenchmark();
+        } else {
+            startBenchmark();
+        }
+    });
     toolbar->addSeparator();
-    toolbar->addAction(QStringLiteral("Add Resolver"), this, &MainWindow::addResolver);
-    QAction* importAction = toolbar->addAction(QStringLiteral("Import"), this, &MainWindow::importResolvers);
+
+    auto* resolverMenu = new QMenu(toolbar);
+    resolverMenu->addAction(QStringLiteral("Add Resolver"), this, &MainWindow::addResolver);
+    QAction* importAction = resolverMenu->addAction(QStringLiteral("Import"), this, &MainWindow::importResolvers);
     importAction->setToolTip(QStringLiteral("Import resolvers from CSV, TSV, Markdown, JSON, or one resolver per line."));
-    toolbar->addAction(QStringLiteral("Detect System DNS"), this, &MainWindow::detectSystemDns);
-    toolbar->addAction(QStringLiteral("Restore Built-ins"), this, &MainWindow::restoreBuiltInResolvers);
-    toolbar->addAction(QStringLiteral("Export"), this, &MainWindow::exportResults);
-    toolbar->addAction(QStringLiteral("Copy Results"), this, &MainWindow::cloneResults);
+    resolverMenu->addAction(QStringLiteral("Detect System DNS"), this, &MainWindow::detectSystemDns);
+    resolverMenu->addAction(QStringLiteral("Restore Built-ins"), this, &MainWindow::restoreBuiltInResolvers);
+    addMenuButton(toolbar, QStringLiteral("Resolvers"), resolverMenu);
+
+    auto* resultsMenu = new QMenu(toolbar);
+    resultsMenu->addAction(QStringLiteral("Export"), this, &MainWindow::exportResults);
+    resultsMenu->addAction(QStringLiteral("Copy Results"), this, &MainWindow::cloneResults);
+    addMenuButton(toolbar, QStringLiteral("Results"), resultsMenu);
     toolbar->addSeparator();
 
     m_ipv4Toggle = new QCheckBox(QStringLiteral("IPv4"), this);
@@ -1052,18 +1276,14 @@ void MainWindow::buildUi()
         toolbar->addWidget(box);
     }
     toolbar->addSeparator();
-    m_verboseLogToggle = new QCheckBox(QStringLiteral("Verbose Log"), this);
-    m_verboseLogToggle->setToolTip(QStringLiteral("Log every query and response. Leave off for smoother large benchmarks."));
-    toolbar->addWidget(m_verboseLogToggle);
-
-    toolbar->addSeparator();
     toolbar->addWidget(new QLabel(QStringLiteral("Show"), this));
     m_resultFilterCombo = new QComboBox(this);
     m_resultFilterCombo->addItem(QStringLiteral("All results"), static_cast<int>(ResultFilter::All));
     m_resultFilterCombo->addItem(QStringLiteral("Reliable only"), static_cast<int>(ResultFilter::ReliableOnly));
-    m_resultFilterCombo->addItem(QStringLiteral("Unreliable only"), static_cast<int>(ResultFilter::UnreliableOnly));
+    m_resultFilterCombo->addItem(QStringLiteral("Loss / outliers"), static_cast<int>(ResultFilter::UnreliableOnly));
     m_resultFilterCombo->addItem(QStringLiteral("No result"), static_cast<int>(ResultFilter::NoResultOnly));
     m_resultFilterCombo->setToolTip(QStringLiteral("Filter visible resolver rows by measured result quality."));
+    m_resultFilterCombo->setMaximumWidth(140);
     connect(m_resultFilterCombo, &QComboBox::currentIndexChanged, this, [this]() {
         if (auto* proxy = dynamic_cast<PinnedSortProxyModel*>(m_proxy)) {
             proxy->setResultFilter(static_cast<ResultFilter>(m_resultFilterCombo->currentData().toInt()));
@@ -1076,33 +1296,74 @@ void MainWindow::buildUi()
     m_sampleSpin = new QSpinBox(this);
     m_sampleSpin->setRange(1, 25000);
     m_sampleSpin->setValue(250);
+    m_sampleSpin->setMaximumWidth(88);
     toolbar->addWidget(m_sampleSpin);
+
+    toolbar->addSeparator();
+    toolbar->addWidget(new QLabel(QStringLiteral("Passes"), this));
+    m_passSpin = new QSpinBox(this);
+    m_passSpin->setRange(1, 5);
+    m_passSpin->setValue(1);
+    m_passSpin->setToolTip(QStringLiteral("Repeat the same benchmark to check whether rankings are stable."));
+    m_passSpin->setMaximumWidth(58);
+    toolbar->addWidget(m_passSpin);
+
+    toolbar->addSeparator();
+    toolbar->addWidget(new QLabel(QStringLiteral("Net"), this));
+    m_benchmarkProfileCombo = new QComboBox(this);
+    m_benchmarkProfileCombo->addItem(QStringLiteral("Conservative"), static_cast<int>(BenchmarkProfile::Conservative));
+    m_benchmarkProfileCombo->addItem(QStringLiteral("Home / Wi-Fi"), static_cast<int>(BenchmarkProfile::HomeWifi));
+    m_benchmarkProfileCombo->addItem(QStringLiteral("Wired / LAN"), static_cast<int>(BenchmarkProfile::WiredLan));
+    m_benchmarkProfileCombo->addItem(QStringLiteral("Fast"), static_cast<int>(BenchmarkProfile::FastNetwork));
+    m_benchmarkProfileCombo->addItem(QStringLiteral("Custom"), static_cast<int>(BenchmarkProfile::Custom));
+    m_benchmarkProfileCombo->setToolTip(QStringLiteral("Chooses default delay and resolver concurrency for the network environment."));
+    m_benchmarkProfileCombo->setMaximumWidth(130);
+    toolbar->addWidget(m_benchmarkProfileCombo);
 
     toolbar->addSeparator();
     toolbar->addWidget(new QLabel(QStringLiteral("Delay"), this));
     m_delaySpin = new QSpinBox(this);
     m_delaySpin->setRange(0, 5000);
-    m_delaySpin->setValue(50);
+    m_delaySpin->setValue(settingsForProfile(BenchmarkProfile::WiredLan).delayMs);
     m_delaySpin->setSuffix(QStringLiteral(" ms"));
     m_delaySpin->setToolTip(QStringLiteral("Delay between queries sent by each resolver."));
+    m_delaySpin->setMaximumWidth(92);
     toolbar->addWidget(m_delaySpin);
 
     toolbar->addSeparator();
     toolbar->addWidget(new QLabel(QStringLiteral("Concurrent"), this));
     m_concurrencySpin = new QSpinBox(this);
     m_concurrencySpin->setRange(1, 64);
-    m_concurrencySpin->setValue(8);
+    m_concurrencySpin->setValue(settingsForProfile(BenchmarkProfile::WiredLan).concurrency);
     m_concurrencySpin->setToolTip(QStringLiteral("Maximum number of resolvers benchmarked at the same time. Higher values finish large lists faster but create more worker threads and can add network or resolver rate-limit noise."));
+    m_concurrencySpin->setMaximumWidth(58);
     toolbar->addWidget(m_concurrencySpin);
+
+    const int wiredProfileIndex = m_benchmarkProfileCombo->findData(static_cast<int>(BenchmarkProfile::WiredLan));
+    m_benchmarkProfileCombo->setCurrentIndex(wiredProfileIndex >= 0 ? wiredProfileIndex : 0);
+    connect(m_benchmarkProfileCombo, &QComboBox::currentIndexChanged, this, [this]() {
+        applyBenchmarkProfile(m_benchmarkProfileCombo->currentData().toInt());
+    });
+    connect(m_delaySpin, &QSpinBox::valueChanged, this, [this]() {
+        markBenchmarkProfileCustom();
+    });
+    connect(m_concurrencySpin, &QSpinBox::valueChanged, this, [this]() {
+        markBenchmarkProfileCustom();
+    });
 
     m_progress = new QProgressBar(this);
     m_progress->setRange(0, 100);
     m_progress->setValue(0);
     m_etaLabel = new QLabel(QStringLiteral("0/0 queries | ETA: -"), this);
+    m_verboseLogToggle = new QCheckBox(QStringLiteral("Verbose Log"), this);
+    m_verboseLogToggle->setToolTip(QStringLiteral("Log every query and response. Leave off for smoother large benchmarks."));
+    statusBar()->addPermanentWidget(m_verboseLogToggle);
     statusBar()->addPermanentWidget(m_etaLabel);
     statusBar()->addPermanentWidget(m_progress, 1);
 
     menuBar()->hide();
+    applyToolbarTheme();
+    updateRunAction();
 }
 
 void MainWindow::connectController()
@@ -1116,10 +1377,106 @@ void MainWindow::connectController()
             flushPendingModelUpdates();
         }
         m_modelFlushTimer->stop();
-        m_proxy->setDynamicSortFilter(true);
-        m_proxy->sort(m_table->horizontalHeader()->sortIndicatorSection(), m_table->horizontalHeader()->sortIndicatorOrder());
-        updateConclusions();
+        if (m_currentPass > 0 && m_currentPass < m_requestedPasses && !m_repeatRunEntries.isEmpty()) {
+            ++m_currentPass;
+            startBenchmarkPass(true);
+            return;
+        }
+        finishBenchmarkRun();
     });
+}
+
+void MainWindow::finishBenchmarkRun()
+{
+    applyRepeatedPassAggregates();
+    m_currentPass = 0;
+    m_repeatRunEntries.clear();
+    m_requestedPasses = 1;
+
+    m_proxy->setDynamicSortFilter(true);
+    m_proxy->sort(m_table->horizontalHeader()->sortIndicatorSection(), m_table->horizontalHeader()->sortIndicatorOrder());
+    updateConclusions();
+    updateRunAction();
+}
+
+void MainWindow::applyRepeatedPassAggregates()
+{
+    if (m_requestedPasses <= 1) {
+        return;
+    }
+
+    for (const ResolverEntry& entry : std::as_const(m_repeatRunEntries)) {
+        const QVector<QVector<ResolverSamplePoint>> passSamples = m_repeatPassSamples.value(entry.id);
+        const QVector<Statistics> passStats = m_repeatPassStats.value(entry.id);
+        if (passSamples.size() < 2 || passStats.size() < 2) {
+            continue;
+        }
+
+        const Statistics aggregateStats = aggregateStatsForPasses(passSamples, passStats);
+        const QVector<ResolverSamplePoint> combinedSamples = combinePassSamples(passSamples);
+        bool dnssecAuthenticatedDataSeen = false;
+        if (const ResolverEntry* currentEntry = m_model.find(entry.id)) {
+            dnssecAuthenticatedDataSeen = currentEntry->dnssecAuthenticatedDataSeen;
+        }
+        m_model.updateStats(
+            entry.id,
+            aggregateStats,
+            ResolverStatus::Finished,
+            dnssecAuthenticatedDataSeen,
+            combinedSamples,
+            passSamples);
+    }
+}
+
+void MainWindow::startBenchmarkPass(bool resetRuntimeState)
+{
+    if (resetRuntimeState) {
+        for (const ResolverEntry& entry : std::as_const(m_repeatRunEntries)) {
+            m_model.resetRuntimeState(entry.id);
+        }
+    }
+
+    m_pendingResolverUpdates.clear();
+    m_pendingStatusUpdates.clear();
+    m_progress->setValue(0);
+    const QString passText = m_requestedPasses > 1
+        ? QStringLiteral(" pass %1/%2").arg(m_currentPass).arg(m_requestedPasses)
+        : QString();
+    appendLogLine(QStringLiteral("Starting benchmark%1.").arg(passText));
+    m_controller.setVerboseLogging(m_verboseLogToggle->isChecked());
+    m_controller.setMaxConcurrentResolvers(m_concurrencySpin->value());
+    m_controller.start(m_repeatRunEntries, m_sampleSpin->value(), m_delaySpin->value(), loadDomains());
+    updateRunAction();
+}
+
+void MainWindow::beginBenchmarkRun(const QList<ResolverEntry>& runEntries, const QString& summary, const QString& logLine, bool resetAllRuntimeState)
+{
+    m_modelFlushTimer->stop();
+    m_pendingResolverUpdates.clear();
+    m_pendingStatusUpdates.clear();
+    m_repeatPassStats.clear();
+    m_repeatPassSamples.clear();
+    m_repeatRunEntries = runEntries;
+    m_requestedPasses = m_passSpin->value();
+    m_currentPass = 1;
+    m_currentRunIds.clear();
+    for (const ResolverEntry& entry : runEntries) {
+        m_currentRunIds.insert(entry.id);
+    }
+
+    m_proxy->setDynamicSortFilter(false);
+    if (resetAllRuntimeState) {
+        m_model.resetRuntimeState();
+    } else {
+        for (const ResolverEntry& entry : std::as_const(runEntries)) {
+            m_model.setResolverEnabled(entry.id, true);
+            m_model.resetRuntimeState(entry.id);
+        }
+    }
+    m_progress->setValue(0);
+    m_resultsTab->setSummary(summary);
+    appendLogLine(logLine);
+    startBenchmarkPass(false);
 }
 
 void MainWindow::detectSystemDns()
@@ -1251,22 +1608,13 @@ void MainWindow::startBenchmark()
         QMessageBox::information(this, QStringLiteral("No Resolvers"), QStringLiteral("No resolvers are enabled for this benchmark."));
         return;
     }
-    m_currentRunIds.clear();
-    for (const ResolverEntry& entry : runEntries) {
-        m_currentRunIds.insert(entry.id);
-    }
-
-    m_modelFlushTimer->stop();
-    m_pendingResolverUpdates.clear();
-    m_pendingStatusUpdates.clear();
-    m_proxy->setDynamicSortFilter(false);
-    m_model.resetRuntimeState();
-    m_progress->setValue(0);
-    m_resultsTab->setSummary(QStringLiteral("Benchmark running..."));
-    appendLogLine(QStringLiteral("Starting benchmark."));
-    m_controller.setVerboseLogging(m_verboseLogToggle->isChecked());
-    m_controller.setMaxConcurrentResolvers(m_concurrencySpin->value());
-    m_controller.start(runEntries, m_sampleSpin->value(), m_delaySpin->value(), loadDomains());
+    beginBenchmarkRun(
+        runEntries,
+        m_passSpin->value() > 1
+            ? QStringLiteral("Benchmark running (%1 passes)...").arg(m_passSpin->value())
+            : QStringLiteral("Benchmark running..."),
+        QStringLiteral("Preparing benchmark."),
+        true);
 }
 
 void MainWindow::startBenchmarkForResolver(const ResolverEntry& entry)
@@ -1298,31 +1646,23 @@ void MainWindow::startBenchmarkForResolvers(const QList<ResolverEntry>& entries)
         return;
     }
 
-    m_modelFlushTimer->stop();
-    m_pendingResolverUpdates.clear();
-    m_pendingStatusUpdates.clear();
-    m_proxy->setDynamicSortFilter(false);
-    m_currentRunIds.clear();
-    for (const ResolverEntry& entry : std::as_const(runEntries)) {
-        m_model.setResolverEnabled(entry.id, true);
-        m_model.resetRuntimeState(entry.id);
-        m_currentRunIds.insert(entry.id);
-    }
-    m_progress->setValue(0);
-    m_resultsTab->setSummary(runEntries.size() == 1
+    beginBenchmarkRun(
+        runEntries,
+        runEntries.size() == 1
             ? QStringLiteral("Benchmark running for %1...").arg(runEntries.first().effectiveName())
-            : QStringLiteral("Benchmark running for %1 selected resolvers...").arg(runEntries.size()));
-    appendLogLine(runEntries.size() == 1
+            : QStringLiteral("Benchmark running for %1 selected resolvers...").arg(runEntries.size()),
+        runEntries.size() == 1
             ? QStringLiteral("Starting single-resolver benchmark for %1.").arg(runEntries.first().effectiveName())
-            : QStringLiteral("Starting selected-resolver benchmark for %1 resolvers.").arg(runEntries.size()));
-    m_controller.setVerboseLogging(m_verboseLogToggle->isChecked());
-    m_controller.setMaxConcurrentResolvers(m_concurrencySpin->value());
-    m_controller.start(runEntries, m_sampleSpin->value(), m_delaySpin->value(), loadDomains());
+            : QStringLiteral("Starting selected-resolver benchmark for %1 resolvers.").arg(runEntries.size()),
+        false);
 }
 
 void MainWindow::stopBenchmark()
 {
+    m_currentPass = 0;
+    m_repeatRunEntries.clear();
     m_controller.stop();
+    updateRunAction();
 }
 
 void MainWindow::exportResults()
@@ -1436,6 +1776,12 @@ void MainWindow::showResolverContextMenu(const QPoint& position)
             startBenchmarkForResolvers(selectedEntries);
     });
     benchmarkAction->setEnabled(!m_controller.isRunning());
+    menu.addAction(QStringLiteral("Resolver Details"), this, [this, row = sourceIndex.row()]() {
+        const QModelIndex detailIndex = m_model.index(row, ResolverModel::DisplayNameColumn);
+        if (detailIndex.isValid()) {
+            showResolverDetailsForIndex(m_proxy->mapFromSource(detailIndex));
+        }
+    });
     const int selectedRowCount = selectedEntries.size();
     QAction* removeAction = menu.addAction(selectedRowCount > 1
             ? QStringLiteral("Remove Selected Resolvers (%1)").arg(selectedRowCount)
@@ -1512,9 +1858,169 @@ void MainWindow::openTimelineForIndex(const QModelIndex& proxyIndex)
     openTimelineChartDialog(this, entries.at(sourceIndex.row()));
 }
 
+void MainWindow::showResolverDetailsForIndex(const QModelIndex& proxyIndex)
+{
+    if (!proxyIndex.isValid()) {
+        return;
+    }
+
+    const QModelIndex sourceIndex = m_proxy->mapToSource(proxyIndex);
+    const QList<ResolverEntry> entries = m_model.entries();
+    if (sourceIndex.row() < 0 || sourceIndex.row() >= entries.size()) {
+        return;
+    }
+
+    const ResolverEntry entry = entries.at(sourceIndex.row());
+    auto* dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(QStringLiteral("%1 Details").arg(entry.effectiveName()));
+    dialog->resize(760, 560);
+
+    QString details;
+    QTextStream stream(&details);
+    stream << "Name: " << entry.effectiveName() << '\n';
+    stream << "Address: " << entry.address << '\n';
+    stream << "Protocol: " << protocolToString(entry.protocol) << '\n';
+    stream << resolverPortDetailsLine(entry) << '\n';
+    if (!entry.providerFamily.isEmpty()) {
+        stream << "Provider: " << entry.providerFamily << '\n';
+    }
+    if (!entry.resolverNotes.isEmpty()) {
+        stream << "Notes: " << entry.resolverNotes << '\n';
+    }
+    stream << "Verdict: " << resolverVerdict(entry) << '\n';
+    stream << "DNSSEC AD: " << (entry.dnssecAuthenticatedDataSeen ? QStringLiteral("seen") : QStringLiteral("not seen")) << "\n\n";
+
+    if (entry.stats.hasSamples()) {
+        stream << "Stats\n";
+        stream << "  Median: " << QString::number(entry.stats.medianMs, 'f', 1) << " ms\n";
+        stream << "  P90: " << QString::number(entry.stats.p90Ms, 'f', 1) << " ms\n";
+        stream << "  Mean: " << QString::number(entry.stats.meanMs, 'f', 1) << " ms\n";
+        stream << "  Stddev: " << QString::number(entry.stats.stddevMs, 'f', 1) << " ms\n";
+        stream << "  Min/Max: " << QString::number(entry.stats.minMs, 'f', 1) << " / " << QString::number(entry.stats.maxMs, 'f', 1) << " ms\n";
+        stream << "  Loss: " << QString::number(entry.stats.lossPercent, 'f', 1) << "%\n\n";
+    }
+
+    int failures = 0;
+    int outliers = 0;
+    qint64 outlierThreshold = 0;
+    if (entry.stats.hasSamples()) {
+        outlierThreshold = static_cast<qint64>(std::max(entry.stats.p90Ms * 2.0, entry.stats.medianMs + 20.0));
+    }
+
+    stream << "Samples\n";
+    if (outlierThreshold > 0) {
+        stream << "  Outlier threshold: >= " << outlierThreshold << " ms\n";
+    }
+
+    QHash<QString, int> failureCounts;
+    QVector<ResolverSamplePoint> notableSamples;
+    constexpr int maxNotableSamples = 24;
+    for (const ResolverSamplePoint& sample : entry.samples) {
+        if (!sample.success) {
+            ++failures;
+            const QString reason = sample.errorString.isEmpty() ? QStringLiteral("failed") : sample.errorString;
+            ++failureCounts[reason];
+            if (notableSamples.size() < maxNotableSamples) {
+                notableSamples.push_back(sample);
+            }
+            continue;
+        }
+        if (outlierThreshold > 0 && sample.rttMs >= outlierThreshold) {
+            ++outliers;
+            if (notableSamples.size() < maxNotableSamples) {
+                notableSamples.push_back(sample);
+            }
+        }
+    }
+
+    if (entry.samples.isEmpty()) {
+        stream << "  No sample timeline recorded.\n";
+    } else {
+        stream << "  Failed samples: " << failures << " / " << entry.samples.size() << '\n';
+        stream << "  Latency outliers: " << outliers << " / " << entry.samples.size() << '\n';
+
+        if (!failureCounts.isEmpty()) {
+            QStringList reasons = failureCounts.keys();
+            std::sort(reasons.begin(), reasons.end(), [&failureCounts](const QString& left, const QString& right) {
+                if (failureCounts.value(left) != failureCounts.value(right)) {
+                    return failureCounts.value(left) > failureCounts.value(right);
+                }
+                return left < right;
+            });
+
+            stream << "\nFailure reasons\n";
+            for (const QString& reason : reasons) {
+                stream << "  " << failureCounts.value(reason) << "x " << reason << '\n';
+            }
+        }
+
+        if (entry.passSamples.size() > 1) {
+            stream << "\nPass summary\n";
+            for (int pass = 0; pass < entry.passSamples.size(); ++pass) {
+                int passFailures = 0;
+                int passOutliers = 0;
+                for (const ResolverSamplePoint& sample : entry.passSamples.at(pass)) {
+                    if (!sample.success) {
+                        ++passFailures;
+                    } else if (outlierThreshold > 0 && sample.rttMs >= outlierThreshold) {
+                        ++passOutliers;
+                    }
+                }
+                stream << "  Pass " << (pass + 1) << ": " << passFailures << " failed, " << passOutliers << " outliers\n";
+            }
+        }
+
+        if (!notableSamples.isEmpty()) {
+            stream << "\nNotable samples";
+            if (notableSamples.size() < failures + outliers) {
+                stream << " (first " << notableSamples.size() << " of " << (failures + outliers) << ')';
+            }
+            stream << '\n';
+            for (const ResolverSamplePoint& sample : notableSamples) {
+                stream << "  ";
+                if (entry.passSamples.size() > 1) {
+                    stream << "pass " << (sample.passIndex + 1) << ", ";
+                }
+                stream << "#" << (sample.sampleIndex + 1) << ": ";
+                if (!sample.success) {
+                    stream << "failed";
+                    if (!sample.errorString.isEmpty()) {
+                        stream << " - " << sample.errorString;
+                    }
+                } else {
+                    stream << sample.rttMs << " ms outlier";
+                }
+                stream << '\n';
+            }
+        } else {
+            stream << "  No failed samples or latency outliers recorded.\n";
+        }
+    }
+
+    auto* editor = new QPlainTextEdit(dialog);
+    editor->setReadOnly(true);
+    editor->setLineWrapMode(QPlainTextEdit::NoWrap);
+    editor->setPlainText(details);
+
+    auto* layout = new QVBoxLayout(dialog);
+    layout->addWidget(editor);
+    dialog->show();
+}
+
 void MainWindow::queueResolverFinished(const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples)
 {
     m_pendingResolverUpdates.insert(resolverId, PendingResolverUpdate{stats, status, dnssecAuthenticatedDataSeen, samples});
+    if (m_requestedPasses > 1) {
+        QVector<ResolverSamplePoint> passSamples = samples;
+        for (ResolverSamplePoint& sample : passSamples) {
+            sample.passIndex = std::max(0, m_currentPass - 1);
+        }
+        m_repeatPassSamples[resolverId].push_back(passSamples);
+    }
+    if (m_requestedPasses > 1 && status == ResolverStatus::Finished && stats.hasSamples()) {
+        m_repeatPassStats[resolverId].push_back(stats);
+    }
     if (!m_modelFlushTimer->isActive()) {
         m_modelFlushTimer->start();
     }
@@ -1566,7 +2072,7 @@ void MainWindow::flushPendingModelUpdates()
         }
         const PendingResolverUpdate update = it.value();
         m_pendingResolverUpdates.remove(resolverId);
-        m_model.updateStats(resolverId, update.stats, update.status, update.dnssecAuthenticatedDataSeen, update.samples);
+        m_model.updateStats(resolverId, update.stats, update.status, update.dnssecAuthenticatedDataSeen, update.samples, {update.samples});
         ++processed;
     }
 
@@ -1608,6 +2114,7 @@ void MainWindow::updateConclusions()
     int dohTotal = 0;
     int dohFinished = 0;
     QStringList unreliable;
+    QStringList latencyOutliers;
     QStringList dnssecAdSeen;
 
     for (const ResolverEntry& entry : entries) {
@@ -1646,6 +2153,9 @@ void MainWindow::updateConclusions()
         if (entry.stats.lossPercent > 1.0) {
             unreliable.push_back(QStringLiteral("%1 (%2% loss)").arg(entry.effectiveName()).arg(entry.stats.lossPercent, 0, 'f', 1));
         }
+        if (resolverHasLatencyOutliers(entry)) {
+            latencyOutliers.push_back(QStringLiteral("%1 (max %2 ms)").arg(entry.effectiveName()).arg(entry.stats.maxMs, 0, 'f', 1));
+        }
         if (entry.dnssecAuthenticatedDataSeen) {
             dnssecAdSeen.push_back(entry.effectiveName());
         }
@@ -1669,7 +2179,10 @@ void MainWindow::updateConclusions()
         lines << QStringLiteral("Most stable resolver: %1, stddev %2 ms.").arg(stable.effectiveName()).arg(stable.stats.stddevMs, 0, 'f', 1);
     }
     if (!unreliable.isEmpty()) {
-        lines << QStringLiteral("Resolvers with >1% loss: %1.").arg(unreliable.join(QStringLiteral(", ")));
+        lines << QStringLiteral("Resolvers with packet loss: %1.").arg(unreliable.join(QStringLiteral(", ")));
+    }
+    if (!latencyOutliers.isEmpty()) {
+        lines << QStringLiteral("Resolvers with latency outliers but no packet loss: %1.").arg(latencyOutliers.join(QStringLiteral(", ")));
     }
     if (!dnssecAdSeen.isEmpty()) {
         lines << QStringLiteral("DNSSEC AD bit observed from: %1.").arg(dnssecAdSeen.join(QStringLiteral(", ")));
@@ -1699,6 +2212,33 @@ void MainWindow::updateConclusions()
                        .arg(entry.stats.meanMs, 0, 'f', 1);
         }
         lines << QStringLiteral("Top reliable performers:\n%1").arg(top.join(QStringLiteral("\n")));
+    }
+
+    QStringList consistencyLines;
+    for (const ResolverEntry& entry : reliableFinished) {
+        const QVector<Statistics> passStats = m_repeatPassStats.value(entry.id);
+        if (passStats.size() < 2) {
+            continue;
+        }
+        double minMedian = std::numeric_limits<double>::max();
+        double maxMedian = 0.0;
+        double maxLoss = 0.0;
+        for (const Statistics& stats : passStats) {
+            minMedian = std::min(minMedian, stats.medianMs);
+            maxMedian = std::max(maxMedian, stats.medianMs);
+            maxLoss = std::max(maxLoss, stats.lossPercent);
+        }
+        consistencyLines << QStringLiteral("%1: median spread %2 ms across %3 passes, max loss %4%")
+                                .arg(entry.effectiveName())
+                                .arg(maxMedian - minMedian, 0, 'f', 1)
+                                .arg(passStats.size())
+                                .arg(maxLoss, 0, 'f', 1);
+        if (consistencyLines.size() >= 5) {
+            break;
+        }
+    }
+    if (!consistencyLines.isEmpty()) {
+        lines << QStringLiteral("Repeat-run consistency:\n%1").arg(consistencyLines.join(QStringLiteral("\n")));
     }
 
     if (!sidelined.isEmpty()) {
@@ -1738,13 +2278,76 @@ void MainWindow::updateConclusions()
     m_resultsTab->setResults(summary, entries);
 }
 
+void MainWindow::applyBenchmarkProfile(int profileId)
+{
+    const auto profile = static_cast<BenchmarkProfile>(profileId);
+    if (profile == BenchmarkProfile::Custom) {
+        return;
+    }
+
+    const BenchmarkProfileSettings profileSettings = settingsForProfile(profile);
+    const QSignalBlocker delayBlocker(m_delaySpin);
+    const QSignalBlocker concurrencyBlocker(m_concurrencySpin);
+    m_delaySpin->setValue(profileSettings.delayMs);
+    m_concurrencySpin->setValue(profileSettings.concurrency);
+}
+
+void MainWindow::markBenchmarkProfileCustom()
+{
+    if (!m_benchmarkProfileCombo) {
+        return;
+    }
+    const int customProfile = static_cast<int>(BenchmarkProfile::Custom);
+    if (m_benchmarkProfileCombo->currentData().toInt() == customProfile) {
+        return;
+    }
+
+    const QSignalBlocker profileBlocker(m_benchmarkProfileCombo);
+    const int customIndex = m_benchmarkProfileCombo->findData(customProfile);
+    if (customIndex >= 0) {
+        m_benchmarkProfileCombo->setCurrentIndex(customIndex);
+    }
+}
+
 void MainWindow::loadSettings()
 {
     QSettings settings;
+    const BenchmarkProfileSettings wiredSettings = settingsForProfile(BenchmarkProfile::WiredLan);
+    if (!settings.value(QStringLiteral("benchmark/defaultsV2Applied"), false).toBool()) {
+        if (settings.value(QStringLiteral("benchmark/interQueryDelayMs"), 50).toInt() == 50) {
+            settings.setValue(QStringLiteral("benchmark/interQueryDelayMs"), wiredSettings.delayMs);
+        }
+        if (settings.value(QStringLiteral("benchmark/maxConcurrentResolvers"), 8).toInt() == 8) {
+            settings.setValue(QStringLiteral("benchmark/maxConcurrentResolvers"), wiredSettings.concurrency);
+        }
+        settings.setValue(QStringLiteral("benchmark/defaultsV2Applied"), true);
+    }
+    if (!settings.value(QStringLiteral("benchmark/wiredLanDefaultApplied"), false).toBool()) {
+        const int currentProfile = settings.value(QStringLiteral("benchmark/profile"), static_cast<int>(BenchmarkProfile::WiredLan)).toInt();
+        if (currentProfile == static_cast<int>(BenchmarkProfile::HomeWifi)) {
+            settings.setValue(QStringLiteral("benchmark/profile"), static_cast<int>(BenchmarkProfile::WiredLan));
+            settings.setValue(QStringLiteral("benchmark/interQueryDelayMs"), wiredSettings.delayMs);
+            settings.setValue(QStringLiteral("benchmark/maxConcurrentResolvers"), wiredSettings.concurrency);
+        }
+        settings.setValue(QStringLiteral("benchmark/wiredLanDefaultApplied"), true);
+    }
+    const int savedDelayMs = settings.value(QStringLiteral("benchmark/interQueryDelayMs"), wiredSettings.delayMs).toInt();
+    const int savedConcurrency = settings.value(QStringLiteral("benchmark/maxConcurrentResolvers"), wiredSettings.concurrency).toInt();
+    const int profileId = settings.contains(QStringLiteral("benchmark/profile"))
+        ? settings.value(QStringLiteral("benchmark/profile")).toInt()
+        : static_cast<int>(profileForSettings(savedDelayMs, savedConcurrency));
+
     restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
     m_sampleSpin->setValue(settings.value(QStringLiteral("benchmark/sampleCount"), 250).toInt());
-    m_delaySpin->setValue(settings.value(QStringLiteral("benchmark/interQueryDelayMs"), 50).toInt());
-    m_concurrencySpin->setValue(settings.value(QStringLiteral("benchmark/maxConcurrentResolvers"), 8).toInt());
+    m_passSpin->setValue(settings.value(QStringLiteral("benchmark/passes"), 1).toInt());
+    const int profileIndex = m_benchmarkProfileCombo->findData(profileId);
+    m_benchmarkProfileCombo->setCurrentIndex(profileIndex >= 0 ? profileIndex : m_benchmarkProfileCombo->findData(static_cast<int>(BenchmarkProfile::WiredLan)));
+    if (static_cast<BenchmarkProfile>(m_benchmarkProfileCombo->currentData().toInt()) == BenchmarkProfile::Custom) {
+        m_delaySpin->setValue(savedDelayMs);
+        m_concurrencySpin->setValue(savedConcurrency);
+    } else {
+        applyBenchmarkProfile(m_benchmarkProfileCombo->currentData().toInt());
+    }
     m_ipv4Toggle->setChecked(settings.value(QStringLiteral("protocols/ipv4"), true).toBool());
     m_ipv6Toggle->setChecked(settings.value(QStringLiteral("protocols/ipv6"), true).toBool());
     m_dohToggle->setChecked(settings.value(QStringLiteral("protocols/doh"), true).toBool());
@@ -1783,6 +2386,8 @@ void MainWindow::saveSettings()
     QSettings settings;
     settings.setValue(QStringLiteral("window/geometry"), saveGeometry());
     settings.setValue(QStringLiteral("benchmark/sampleCount"), m_sampleSpin->value());
+    settings.setValue(QStringLiteral("benchmark/passes"), m_passSpin->value());
+    settings.setValue(QStringLiteral("benchmark/profile"), m_benchmarkProfileCombo->currentData().toInt());
     settings.setValue(QStringLiteral("benchmark/interQueryDelayMs"), m_delaySpin->value());
     settings.setValue(QStringLiteral("benchmark/maxConcurrentResolvers"), m_concurrencySpin->value());
     settings.setValue(QStringLiteral("protocols/ipv4"), m_ipv4Toggle->isChecked());

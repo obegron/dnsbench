@@ -21,6 +21,9 @@ DotResolver::DotResolver(const ResolverEntry& entry, int timeoutMs, QObject* par
 
     connect(&m_socket, &QSslSocket::errorOccurred, this, [this](QAbstractSocket::SocketError) {
         if (m_queryInFlight) {
+            if (retryCurrentQueryAfterClosedConnection()) {
+                return;
+            }
             m_lastError = m_socket.errorString();
             finish(0, false);
         }
@@ -88,6 +91,7 @@ void DotResolver::query(const QString& domain, QueryCallback callback)
 
     m_lastError.clear();
     m_lastAuthenticatedDataBit = false;
+    m_retryingAfterClosedConnection = false;
     m_transactionId = static_cast<quint16>(QRandomGenerator::global()->bounded(1, 0xffff));
     m_expectedDomain = domain;
     const QByteArray dnsPacket = DnsPacket::buildQuery(domain, m_transactionId, 1);
@@ -100,18 +104,27 @@ void DotResolver::query(const QString& domain, QueryCallback callback)
     m_callback = std::move(callback);
     m_queryInFlight = true;
     m_buffer.clear();
+    m_currentDnsPacket = dnsPacket;
 
     if (m_socket.state() == QAbstractSocket::ConnectedState && m_socket.isEncrypted()) {
-        sendCurrentQuery(dnsPacket);
+        sendCurrentQuery(m_currentDnsPacket);
         return;
     }
 
+    connectAndSendCurrentQuery();
+}
+
+void DotResolver::connectAndSendCurrentQuery()
+{
     disconnect(m_encryptedConnection);
-    m_encryptedConnection = connect(&m_socket, &QSslSocket::encrypted, this, [this, dnsPacket]() {
+    m_encryptedConnection = connect(&m_socket, &QSslSocket::encrypted, this, [this]() {
         disconnect(m_encryptedConnection);
         m_encryptedConnection = {};
-        sendCurrentQuery(dnsPacket);
+        sendCurrentQuery(m_currentDnsPacket);
     });
+    if (m_socket.state() != QAbstractSocket::UnconnectedState) {
+        m_socket.abort();
+    }
     m_timeout.start(m_timeoutMs);
     m_socket.connectToHostEncrypted(m_entry.address, static_cast<quint16>(m_entry.port));
 }
@@ -136,8 +149,33 @@ void DotResolver::sendCurrentQuery(const QByteArray& dnsPacket)
     m_elapsed.restart();
     m_timeout.start(m_timeoutMs);
     if (m_socket.write(framed) != framed.size()) {
+        m_lastError = m_socket.errorString();
+        if (retryCurrentQueryAfterClosedConnection()) {
+            return;
+        }
         finish(0, false);
     }
+}
+
+bool DotResolver::retryCurrentQueryAfterClosedConnection()
+{
+    if (m_retryingAfterClosedConnection || m_currentDnsPacket.isEmpty()) {
+        return false;
+    }
+
+    const QString error = m_socket.errorString();
+    if (!error.contains(QStringLiteral("closed"), Qt::CaseInsensitive)) {
+        return false;
+    }
+
+    m_retryingAfterClosedConnection = true;
+    m_lastError.clear();
+    m_buffer.clear();
+    disconnect(m_encryptedConnection);
+    m_encryptedConnection = {};
+    m_socket.abort();
+    connectAndSendCurrentQuery();
+    return true;
 }
 
 void DotResolver::finish(qint64 rttMs, bool success)
@@ -150,6 +188,7 @@ void DotResolver::finish(qint64 rttMs, bool success)
     disconnect(m_encryptedConnection);
     m_encryptedConnection = {};
     m_queryInFlight = false;
+    m_currentDnsPacket.clear();
     QueryCallback callback = std::move(m_callback);
     m_callback = {};
     if (callback) {

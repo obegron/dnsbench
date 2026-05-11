@@ -25,6 +25,7 @@ public:
     bool isRunning() const;
     void setMaxConcurrentResolvers(int maxConcurrentResolvers);
     void setVerboseLogging(bool verboseLogging);
+    static int recommendedMaxConcurrentResolvers();
 
 signals:
     void progressUpdated(int completed, int total, qint64 elapsedMs);

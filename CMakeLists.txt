@@ -44,6 +44,7 @@ endif()
 set(DNSBENCH_APP_SOURCES
     src/main.cpp
     resources/resources.qrc
+    src/cli/HeadlessBenchmark.cpp
     src/ui/AddResolverDialog.cpp
     src/ui/MainWindow.cpp
     src/ui/ResultsTab.cpp
@@ -100,3 +101,14 @@ qt_add_executable(test_dns_detection
 target_include_directories(test_dns_detection PRIVATE src)
 target_link_libraries(test_dns_detection PRIVATE dnsbench_core Qt6::Test)
 add_test(NAME test_dns_detection COMMAND test_dns_detection)
+
+qt_add_executable(test_udp_benchmark
+    tests/test_udp_benchmark.cpp
+    src/benchmark/BenchmarkController.cpp
+    src/benchmark/UdpResolver.cpp
+    src/benchmark/DohResolver.cpp
+    src/benchmark/DotResolver.cpp
+)
+target_include_directories(test_udp_benchmark PRIVATE src)
+target_link_libraries(test_udp_benchmark PRIVATE dnsbench_core Qt6::Test)
+add_test(NAME test_udp_benchmark COMMAND test_udp_benchmark)

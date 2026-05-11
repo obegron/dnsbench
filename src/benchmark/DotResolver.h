@@ -25,6 +25,7 @@ private:
     int m_timeoutMs = 5000;
     QSslSocket m_socket;
     QByteArray m_buffer;
+    QByteArray m_currentDnsPacket;
     QTimer m_timeout;
     QMetaObject::Connection m_encryptedConnection;
     QueryCallback m_callback;
@@ -34,7 +35,10 @@ private:
     quint16 m_transactionId = 0;
     bool m_queryInFlight = false;
     bool m_lastAuthenticatedDataBit = false;
+    bool m_retryingAfterClosedConnection = false;
 
+    void connectAndSendCurrentQuery();
     void sendCurrentQuery(const QByteArray& dnsPacket);
+    bool retryCurrentQueryAfterClosedConnection();
     void finish(qint64 rttMs, bool success);
 };

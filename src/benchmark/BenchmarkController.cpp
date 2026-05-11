@@ -23,9 +23,9 @@ constexpr int fullQueryTimeoutMs = 5000;
 constexpr int encryptedWarmupTimeoutMs = 8000;
 constexpr int warmupCount = 10;
 constexpr int warmupSuccessThreshold = 3;
+constexpr int cachePrimeNoResponseLimit = 3;
 constexpr int submitBatchSize = 32;
 constexpr int maxStartJitterMs = 100;
-constexpr int defaultMaxConcurrentResolvers = 8;
 constexpr int hardMaxConcurrentResolvers = 64;
 constexpr int earlyNoResponseLimit = 3;
 
@@ -159,6 +159,60 @@ public:
                 .arg(warmupCount));
         }
 
+        resolver->setTimeoutMs(fullQueryTimeoutMs);
+        const int primeCount = std::min(m_sampleCount, static_cast<int>(m_domains.size()));
+        if (primeCount > 0) {
+            postSummaryLog(QStringLiteral("Priming %1 with %2 unmeasured cache warm-up query/queries.")
+                .arg(m_entry.effectiveName())
+                .arg(primeCount));
+
+            int primeSuccesses = 0;
+            int primeFailuresBeforeFirstSuccess = 0;
+            QString firstPrimeError;
+            for (int i = 0; i < primeCount && !isCancelled(); ++i) {
+                qint64 ignoredRttMs = 0;
+                QString error;
+                if (queryBlocking(resolver.get(), domainForSample(i), &ignoredRttMs, &error)) {
+                    ++primeSuccesses;
+                } else {
+                    if (firstPrimeError.isEmpty()) {
+                        firstPrimeError = error;
+                    }
+                    if (primeSuccesses == 0 && ++primeFailuresBeforeFirstSuccess >= cachePrimeNoResponseLimit) {
+                        break;
+                    }
+                }
+                if (i + 1 < primeCount) {
+                    sleepBetweenQueries();
+                }
+            }
+
+            if (isCancelled()) {
+                postComplete();
+                return;
+            }
+
+            if (primeSuccesses == 0) {
+                const Statistics stats = Statistics::fromSamples({}, m_sampleCount);
+                postStatus(ResolverStatus::Sidelined);
+                postResolverFinished(stats, ResolverStatus::Sidelined, false, {});
+                QString message = QStringLiteral("Sidelined %1: no responses during cache warm-up.")
+                    .arg(m_entry.effectiveName());
+                if (!firstPrimeError.isEmpty()) {
+                    message += QStringLiteral(" Last error: %1.").arg(firstPrimeError);
+                }
+                postSummaryLog(message);
+                postProgress(m_sampleCount, true);
+                postComplete();
+                return;
+            }
+
+            postSummaryLog(QStringLiteral("Cache warm-up complete for %1: %2/%3 responses.")
+                .arg(m_entry.effectiveName())
+                .arg(primeSuccesses)
+                .arg(primeCount));
+        }
+
         QVector<qint64> samples;
         samples.reserve(m_sampleCount);
         QVector<ResolverSamplePoint> samplePoints;
@@ -176,13 +230,13 @@ public:
             const bool success = queryBlocking(resolver.get(), domain, &rttMs, &error);
             if (success) {
                 samples.push_back(rttMs);
-                samplePoints.push_back({i, rttMs, true});
+                samplePoints.push_back({i, rttMs, true, {}});
                 dnssecAuthenticatedDataSeen = dnssecAuthenticatedDataSeen || resolver->lastAuthenticatedDataBit();
                 postVerboseLog(QStringLiteral("Response %1 via %2 in %3 ms.")
                         .arg(domain, m_entry.effectiveName())
                         .arg(rttMs));
             } else {
-                samplePoints.push_back({i, 0, false});
+                samplePoints.push_back({i, 0, false, error});
                 postVerboseLog(error.isEmpty()
                     ? QStringLiteral("Timeout/failure for %1 via %2.").arg(domain, m_entry.effectiveName())
                     : QStringLiteral("Failure for %1 via %2: %3.").arg(domain, m_entry.effectiveName(), error));
@@ -382,7 +436,7 @@ private:
 BenchmarkController::BenchmarkController(QObject* parent)
     : QObject(parent)
 {
-    m_threadPool.setMaxThreadCount(defaultMaxConcurrentResolvers);
+    m_threadPool.setMaxThreadCount(recommendedMaxConcurrentResolvers());
     m_threadPool.setExpiryTimeout(-1);
     m_submitTimer.setSingleShot(true);
     connect(&m_submitTimer, &QTimer::timeout, this, &BenchmarkController::submitMoreResolvers);
@@ -457,6 +511,15 @@ void BenchmarkController::setMaxConcurrentResolvers(int maxConcurrentResolvers)
 void BenchmarkController::setVerboseLogging(bool verboseLogging)
 {
     m_verboseLogging = verboseLogging;
+}
+
+int BenchmarkController::recommendedMaxConcurrentResolvers()
+{
+    const int threads = std::max(1, QThread::idealThreadCount());
+    if (threads <= 2) {
+        return 1;
+    }
+    return std::clamp((threads + 3) / 4, 2, 4);
 }
 
 void BenchmarkController::handleTaskProgress(int completedDelta)

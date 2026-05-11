@@ -26,6 +26,8 @@ struct ResolverSamplePoint {
     int sampleIndex = 0;
     qint64 rttMs = 0;
     bool success = false;
+    QString errorString;
+    int passIndex = 0;
 };
 
 struct ResolverEntry {
@@ -38,9 +40,12 @@ struct ResolverEntry {
     bool enabled = true;
     bool systemResolver = false;
     bool builtInResolver = false;
+    QString providerFamily;
+    QString resolverNotes;
     ResolverStatus status = ResolverStatus::Idle;
     bool dnssecAuthenticatedDataSeen = false;
     QVector<ResolverSamplePoint> samples;
+    QVector<QVector<ResolverSamplePoint>> passSamples;
     Statistics stats;
 
     QString effectiveName() const;
@@ -56,4 +61,7 @@ QString protocolToString(ResolverProtocol protocol);
 ResolverProtocol protocolFromString(const QString& value, bool* ok = nullptr);
 QString statusToString(ResolverStatus status);
 QString resolverVerdict(const ResolverEntry& entry);
+bool resolverHasLoss(const ResolverEntry& entry);
+bool resolverHasLatencyOutliers(const ResolverEntry& entry);
+bool resolverIsReliable(const ResolverEntry& entry);
 int defaultPortForProtocol(ResolverProtocol protocol);

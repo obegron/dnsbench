@@ -10,6 +10,7 @@
 
 class QCheckBox;
 class QComboBox;
+class QAction;
 class QLabel;
 class QPlainTextEdit;
 class QProgressBar;
@@ -26,12 +27,17 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
 
+protected:
+    void changeEvent(QEvent* event) override;
+
 private:
     ResolverModel m_model;
     QSortFilterProxyModel* m_proxy = nullptr;
     BenchmarkController m_controller;
     QTableView* m_table = nullptr;
+    QAction* m_runAction = nullptr;
     QSpinBox* m_sampleSpin = nullptr;
+    QSpinBox* m_passSpin = nullptr;
     QSpinBox* m_delaySpin = nullptr;
     QSpinBox* m_concurrencySpin = nullptr;
     QProgressBar* m_progress = nullptr;
@@ -41,6 +47,7 @@ private:
     QCheckBox* m_dohToggle = nullptr;
     QCheckBox* m_dotToggle = nullptr;
     QCheckBox* m_verboseLogToggle = nullptr;
+    QComboBox* m_benchmarkProfileCombo = nullptr;
     QComboBox* m_resultFilterCombo = nullptr;
     ResultsTab* m_resultsTab = nullptr;
     QPlainTextEdit* m_log = nullptr;
@@ -55,6 +62,11 @@ private:
     };
     QHash<QString, PendingResolverUpdate> m_pendingResolverUpdates;
     QHash<QString, ResolverStatus> m_pendingStatusUpdates;
+    QList<ResolverEntry> m_repeatRunEntries;
+    QHash<QString, QVector<Statistics>> m_repeatPassStats;
+    QHash<QString, QVector<QVector<ResolverSamplePoint>>> m_repeatPassSamples;
+    int m_requestedPasses = 1;
+    int m_currentPass = 0;
 
     void buildUi();
     void connectController();
@@ -66,18 +78,27 @@ private:
     void startBenchmark();
     void startBenchmarkForResolver(const ResolverEntry& entry);
     void startBenchmarkForResolvers(const QList<ResolverEntry>& entries);
+    void beginBenchmarkRun(const QList<ResolverEntry>& runEntries, const QString& summary, const QString& logLine, bool resetAllRuntimeState);
+    void startBenchmarkPass(bool resetRuntimeState);
+    void finishBenchmarkRun();
+    void applyRepeatedPassAggregates();
     void stopBenchmark();
     void exportResults();
     void cloneResults();
     void showResolverContextMenu(const QPoint& position);
     void removeSelectedResolvers();
     void openTimelineForIndex(const QModelIndex& proxyIndex);
+    void showResolverDetailsForIndex(const QModelIndex& proxyIndex);
     void queueResolverFinished(const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples);
     void queueResolverStatus(const QString& resolverId, ResolverStatus status);
     void flushPendingModelUpdates();
     void appendLogLine(const QString& line);
     void updateProgress(int completed, int total, qint64 elapsedMs);
     void updateConclusions();
+    void applyBenchmarkProfile(int profileId);
+    void markBenchmarkProfileCustom();
+    void applyToolbarTheme();
+    void updateRunAction();
     void loadSettings();
     void saveSettings();
     QStringList loadDomains() const;

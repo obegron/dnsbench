@@ -4,6 +4,7 @@
 #include <QColor>
 #include <QLocale>
 #include <QSet>
+#include <QStringList>
 
 #include <algorithm>
 
@@ -108,11 +109,11 @@ QString resolverVerdict(const ResolverEntry& entry)
     if (!entry.stats.hasSamples()) {
         return QStringLiteral("No result");
     }
-    if (entry.stats.lossPercent > 1.0) {
-        return QStringLiteral("Unreliable");
+    if (resolverHasLoss(entry)) {
+        return QStringLiteral("Packet loss");
     }
-    if (entry.stats.stddevMs > std::max(20.0, entry.stats.medianMs * 3.0)) {
-        return QStringLiteral("Spiky latency");
+    if (resolverHasLatencyOutliers(entry)) {
+        return QStringLiteral("Latency outliers");
     }
     if (entry.stats.medianMs <= 10.0) {
         return QStringLiteral("Very fast");
@@ -123,14 +124,32 @@ QString resolverVerdict(const ResolverEntry& entry)
     return QStringLiteral("Measured");
 }
 
+bool resolverHasLoss(const ResolverEntry& entry)
+{
+    return entry.stats.hasSamples() && entry.stats.lossPercent > 1.0;
+}
+
+bool resolverHasLatencyOutliers(const ResolverEntry& entry)
+{
+    return entry.stats.hasSamples()
+        && entry.stats.lossPercent <= 1.0
+        && entry.stats.stddevMs > std::max(20.0, entry.stats.medianMs * 3.0);
+}
+
+bool resolverIsReliable(const ResolverEntry& entry)
+{
+    return entry.stats.hasSamples() && entry.stats.lossPercent <= 1.0;
+}
+
 int defaultPortForProtocol(ResolverProtocol protocol)
 {
     switch (protocol) {
     case ResolverProtocol::DoT:
         return 853;
+    case ResolverProtocol::DoH:
+        return 443;
     case ResolverProtocol::IPv4:
     case ResolverProtocol::IPv6:
-    case ResolverProtocol::DoH:
         return 53;
     }
     return 53;
@@ -166,6 +185,27 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
 
     if (role == Qt::ToolTipRole && column == PinColumn) {
         return QStringLiteral("Pin keeps this resolver at the top while sorting. It does not control benchmark selection.");
+    }
+    if (role == Qt::ToolTipRole) {
+        QStringList lines;
+        lines << entry.effectiveName();
+        if (!entry.providerFamily.isEmpty()) {
+            lines << QStringLiteral("Provider: %1").arg(entry.providerFamily);
+        }
+        lines << QStringLiteral("Protocol: %1").arg(protocolToString(entry.protocol));
+        lines << QStringLiteral("Address: %1").arg(entry.address);
+        if (!entry.resolverNotes.isEmpty()) {
+            lines << entry.resolverNotes;
+        }
+        if (entry.status == ResolverStatus::Finished && entry.stats.hasSamples()) {
+            lines << QStringLiteral("Verdict: %1").arg(resolverVerdict(entry));
+            if (resolverHasLoss(entry)) {
+                lines << QStringLiteral("Packet loss affects reliability.");
+            } else if (resolverHasLatencyOutliers(entry)) {
+                lines << QStringLiteral("No packet loss, but some samples were much slower than typical.");
+            }
+        }
+        return lines.join(QLatin1Char('\n'));
     }
 
     if (role == Qt::ForegroundRole) {
@@ -225,6 +265,9 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
     case DisplayNameColumn:
         return entry.effectiveName();
     case AddressColumn:
+        if (entry.protocol == ResolverProtocol::DoH) {
+            return entry.address;
+        }
         return entry.port == defaultPortForProtocol(entry.protocol)
             ? entry.address
             : QStringLiteral("%1:%2").arg(entry.address).arg(entry.port);
@@ -393,7 +436,7 @@ void ResolverModel::removeRowsByIndexes(const QModelIndexList& indexes)
     }
 }
 
-void ResolverModel::updateStats(const QString& id, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples)
+void ResolverModel::updateStats(const QString& id, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples, const QVector<QVector<ResolverSamplePoint>>& passSamples)
 {
     const int row = rowForId(id);
     if (row < 0) {
@@ -404,6 +447,7 @@ void ResolverModel::updateStats(const QString& id, const Statistics& stats, Reso
     m_entries[row].status = status;
     m_entries[row].dnssecAuthenticatedDataSeen = dnssecAuthenticatedDataSeen;
     m_entries[row].samples = samples;
+    m_entries[row].passSamples = passSamples;
     emit dataChanged(index(row, MedianColumn), index(row, StatusColumn),
         {Qt::DisplayRole, Qt::UserRole, Qt::ForegroundRole, HasSamplesRole});
     emit resolverChanged(m_entries[row]);
@@ -463,6 +507,7 @@ void ResolverModel::resetRuntimeState()
         entry.status = ResolverStatus::Idle;
         entry.dnssecAuthenticatedDataSeen = false;
         entry.samples.clear();
+        entry.passSamples.clear();
     }
     emit dataChanged(index(0, 0), index(m_entries.size() - 1, ColumnCount - 1));
 }
@@ -478,6 +523,7 @@ void ResolverModel::resetRuntimeState(const QString& id)
     m_entries[row].status = ResolverStatus::Idle;
     m_entries[row].dnssecAuthenticatedDataSeen = false;
     m_entries[row].samples.clear();
+    m_entries[row].passSamples.clear();
     emit dataChanged(index(row, 0), index(row, StatusColumn));
     emit resolverChanged(m_entries[row]);
 }

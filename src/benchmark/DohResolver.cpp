@@ -41,7 +41,7 @@ QString resolutionHint(const QString& host)
     return sinkholeLike
         ? QStringLiteral(" %1 resolves to %2, which looks like DNS blocking/sinkholing; allowlist this DoH hostname in your current DNS filter.")
               .arg(host, addresses.join(QStringLiteral(", ")))
-        : QStringLiteral(" %1 resolves to %2. If this is a filtering or internal address, allowlist the DoH hostname.")
+        : QStringLiteral(" Host lookup for %1 returned %2.")
               .arg(host, addresses.join(QStringLiteral(", ")));
 }
 
@@ -86,6 +86,17 @@ QUrl DohResolver::endpoint() const
 
 void DohResolver::query(const QString& domain, QueryCallback callback)
 {
+    auto elapsed = std::make_shared<QElapsedTimer>();
+    elapsed->start();
+    queryWithRetry(domain, std::move(callback), true, std::move(elapsed));
+}
+
+void DohResolver::queryWithRetry(
+    const QString& domain,
+    QueryCallback callback,
+    bool retryHttp2ProtocolError,
+    std::shared_ptr<QElapsedTimer> elapsed)
+{
     m_lastError.clear();
     m_lastAuthenticatedDataBit = false;
     const quint16 transactionId = static_cast<quint16>(QRandomGenerator::global()->bounded(1, 0xffff));
@@ -107,8 +118,6 @@ void DohResolver::query(const QString& domain, QueryCallback callback)
     request.setRawHeader("Accept", "application/dns-message");
     request.setTransferTimeout(m_timeoutMs);
 
-    auto elapsed = std::make_shared<QElapsedTimer>();
-    elapsed->start();
     QNetworkReply* reply = m_network.post(request, queryPacket);
 
     QObject::connect(reply, &QNetworkReply::sslErrors, reply, [this](const QList<QSslError>& errors) {
@@ -120,11 +129,17 @@ void DohResolver::query(const QString& domain, QueryCallback callback)
         m_lastError = QStringLiteral("TLS error: %1").arg(messages.join(QStringLiteral("; ")));
     });
 
-    QObject::connect(reply, &QNetworkReply::finished, reply, [this, reply, transactionId, domain, elapsed, callback = std::move(callback)]() mutable {
+    QObject::connect(reply, &QNetworkReply::finished, reply, [this, reply, transactionId, domain, elapsed, retryHttp2ProtocolError, callback = std::move(callback)]() mutable {
         const QByteArray payload = reply->readAll();
         const QVariant statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
         bool success = false;
         if (reply->error() != QNetworkReply::NoError) {
+            if (retryHttp2ProtocolError && reply->errorString().contains(QStringLiteral("HTTP/2 protocol error"), Qt::CaseInsensitive)) {
+                m_network.clearConnectionCache();
+                reply->deleteLater();
+                queryWithRetry(domain, std::move(callback), false, elapsed);
+                return;
+            }
             m_lastError = QStringLiteral("%1 (%2)%3")
                 .arg(reply->errorString())
                 .arg(static_cast<int>(reply->error()))

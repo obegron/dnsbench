@@ -3,8 +3,11 @@
 #include "benchmark/BaseResolver.h"
 #include "model/ResolverEntry.h"
 
+#include <QElapsedTimer>
 #include <QNetworkAccessManager>
 #include <QUrl>
+
+#include <memory>
 
 class DohResolver : public BaseResolver {
     Q_OBJECT
@@ -26,4 +29,5 @@ private:
     QNetworkAccessManager m_network;
 
     QUrl endpoint() const;
+    void queryWithRetry(const QString& domain, QueryCallback callback, bool retryHttp2ProtocolError, std::shared_ptr<QElapsedTimer> elapsed);
 };
