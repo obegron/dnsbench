@@ -35,7 +35,9 @@ UdpResolver::UdpResolver(const ResolverEntry& entry, int timeoutMs, QObject* par
                 continue;
             }
             if (!DnsPacket::isValidResponse(datagram, m_transactionId, m_expectedDomain, 1)) {
-                m_lastError = QStringLiteral("invalid DNS response for %1").arg(m_expectedDomain);
+                m_lastError = DnsPacket::isTruncatedResponse(datagram, m_transactionId)
+                    ? QStringLiteral("truncated UDP response for %1").arg(m_expectedDomain)
+                    : QStringLiteral("invalid DNS response for %1").arg(m_expectedDomain);
                 finish(0, false);
                 return;
             }

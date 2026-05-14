@@ -86,6 +86,7 @@ public:
         QStringList domains,
         int domainOffset,
         int startJitterMs,
+        bool primeCache,
         bool verboseLogging,
         bool summaryLogging,
         std::shared_ptr<std::atomic_bool> cancelled)
@@ -96,6 +97,7 @@ public:
         , m_domains(std::move(domains))
         , m_domainOffset(std::max(0, domainOffset))
         , m_startJitterMs(std::clamp(startJitterMs, 0, maxStartJitterMs))
+        , m_primeCache(primeCache)
         , m_verboseLogging(verboseLogging)
         , m_summaryLogging(summaryLogging)
         , m_cancelled(std::move(cancelled))
@@ -160,7 +162,7 @@ public:
         }
 
         resolver->setTimeoutMs(fullQueryTimeoutMs);
-        const int primeCount = std::min(m_sampleCount, static_cast<int>(m_domains.size()));
+        const int primeCount = m_primeCache ? std::min(m_sampleCount, static_cast<int>(m_domains.size())) : 0;
         if (primeCount > 0) {
             postSummaryLog(QStringLiteral("Priming %1 with %2 unmeasured cache warm-up query/queries.")
                 .arg(m_entry.effectiveName())
@@ -282,6 +284,7 @@ private:
     QStringList m_domains;
     int m_domainOffset = 0;
     int m_startJitterMs = 0;
+    bool m_primeCache = true;
     bool m_verboseLogging = false;
     bool m_summaryLogging = true;
     std::shared_ptr<std::atomic_bool> m_cancelled;
@@ -442,13 +445,14 @@ BenchmarkController::BenchmarkController(QObject* parent)
     connect(&m_submitTimer, &QTimer::timeout, this, &BenchmarkController::submitMoreResolvers);
 }
 
-void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampleCount, int interQueryDelayMs, QStringList domains)
+void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampleCount, int interQueryDelayMs, QStringList domains, bool primeCache)
 {
     stop();
 
     m_resolvers = resolvers;
     m_sampleCount = std::max(1, sampleCount);
     m_interQueryDelayMs = std::max(0, interQueryDelayMs);
+    m_primeCache = primeCache;
     m_domains = std::move(domains);
     if (m_domains.isEmpty()) {
         m_domains = {QStringLiteral("example.com"), QStringLiteral("qt.io"), QStringLiteral("cloudflare.com")};
@@ -469,6 +473,9 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
     emit progressUpdated(0, m_total, 0);
     emit logLine(QStringLiteral("Running up to %1 resolver(s) in parallel.").arg(m_threadPool.maxThreadCount()));
     emit logLine(QStringLiteral("Inter-query delay: %1 ms.").arg(m_interQueryDelayMs));
+    if (!m_primeCache) {
+        emit logLine(QStringLiteral("Cache warm-up skipped for this pass; using cache state from earlier pass(es)."));
+    }
     const bool summaryLogging = m_verboseLogging || m_resolvers.size() <= 250;
     if (!summaryLogging) {
         emit logLine(QStringLiteral("Per-resolver summary log lines suppressed for this large run. Enable Verbose Log to show every resolver."));
@@ -568,6 +575,7 @@ void BenchmarkController::submitMoreResolvers()
             m_domains,
             domainOffset,
             startJitterMs,
+            m_primeCache,
             m_verboseLogging,
             summaryLogging,
             m_cancelled));

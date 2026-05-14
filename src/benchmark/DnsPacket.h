@@ -9,6 +9,7 @@ QByteArray buildQuery(const QString& domain, quint16 transactionId, quint16 qtyp
 bool isValidResponse(const QByteArray& packet, quint16 transactionId);
 bool isValidResponse(const QByteArray& packet, quint16 transactionId, const QString& expectedDomain, quint16 qtype = 1);
 bool hasExpectedResponseId(const QByteArray& packet, quint16 transactionId);
+bool isTruncatedResponse(const QByteArray& packet, quint16 transactionId);
 bool authenticatedDataBit(const QByteArray& packet);
 
 }

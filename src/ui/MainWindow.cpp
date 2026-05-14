@@ -17,6 +17,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFrame>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QHostAddress>
@@ -1358,6 +1359,11 @@ void MainWindow::buildUi()
     m_verboseLogToggle = new QCheckBox(QStringLiteral("Verbose Log"), this);
     m_verboseLogToggle->setToolTip(QStringLiteral("Log every query and response. Leave off for smoother large benchmarks."));
     statusBar()->addPermanentWidget(m_verboseLogToggle);
+    auto* statusSeparator = new QFrame(this);
+    statusSeparator->setFrameShape(QFrame::VLine);
+    statusSeparator->setFrameShadow(QFrame::Plain);
+    statusSeparator->setFixedHeight(fontMetrics().height() + 6);
+    statusBar()->addPermanentWidget(statusSeparator);
     statusBar()->addPermanentWidget(m_etaLabel);
     statusBar()->addPermanentWidget(m_progress, 1);
 
@@ -1445,7 +1451,8 @@ void MainWindow::startBenchmarkPass(bool resetRuntimeState)
     appendLogLine(QStringLiteral("Starting benchmark%1.").arg(passText));
     m_controller.setVerboseLogging(m_verboseLogToggle->isChecked());
     m_controller.setMaxConcurrentResolvers(m_concurrencySpin->value());
-    m_controller.start(m_repeatRunEntries, m_sampleSpin->value(), m_delaySpin->value(), loadDomains());
+    const bool primeCache = m_requestedPasses <= 1 || m_currentPass <= 1;
+    m_controller.start(m_repeatRunEntries, m_sampleSpin->value(), m_delaySpin->value(), loadDomains(), primeCache);
     updateRunAction();
 }
 

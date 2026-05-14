@@ -69,6 +69,9 @@ private slots:
     {
         QVERIFY(!DnsPacket::isValidResponse(dnsResponse(QStringLiteral("example.com"), 0x1234, 0x8183), 0x1234, QStringLiteral("example.com"), 1));
         QVERIFY(!DnsPacket::isValidResponse(dnsResponse(QStringLiteral("example.com"), 0x1234, 0x8380), 0x1234, QStringLiteral("example.com"), 1));
+        QVERIFY(DnsPacket::isTruncatedResponse(dnsResponse(QStringLiteral("example.com"), 0x1234, 0x8380), 0x1234));
+        QVERIFY(!DnsPacket::isTruncatedResponse(dnsResponse(QStringLiteral("example.com"), 0x1234), 0x1234));
+        QVERIFY(!DnsPacket::isTruncatedResponse(dnsResponse(QStringLiteral("example.com"), 0x4321, 0x8380), 0x1234));
     }
 
     void rejectsMalformedQueryNames()

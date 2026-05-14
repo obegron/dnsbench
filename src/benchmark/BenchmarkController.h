@@ -20,7 +20,7 @@ class BenchmarkController : public QObject {
 public:
     explicit BenchmarkController(QObject* parent = nullptr);
 
-    void start(const QList<ResolverEntry>& resolvers, int sampleCount, int interQueryDelayMs, QStringList domains);
+    void start(const QList<ResolverEntry>& resolvers, int sampleCount, int interQueryDelayMs, QStringList domains, bool primeCache = true);
     void stop();
     bool isRunning() const;
     void setMaxConcurrentResolvers(int maxConcurrentResolvers);
@@ -47,6 +47,7 @@ private:
     qint64 m_lastProgressEmitMs = 0;
     bool m_running = false;
     bool m_verboseLogging = false;
+    bool m_primeCache = true;
     QThreadPool m_threadPool;
     QTimer m_submitTimer;
     std::shared_ptr<std::atomic_bool> m_cancelled;

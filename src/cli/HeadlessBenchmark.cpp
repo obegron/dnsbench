@@ -19,24 +19,50 @@
 
 namespace {
 
-QStringList loadDomains(int limit)
+QStringList readDomainLines(QFile& file)
 {
-    QFile file(QStringLiteral(":/test_domains.txt"));
     QStringList domains;
-    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        while (!file.atEnd()) {
-            const QString line = QString::fromUtf8(file.readLine()).trimmed();
-            if (!line.isEmpty() && !line.startsWith(QLatin1Char('#'))) {
-                domains.push_back(line);
-            }
+    while (!file.atEnd()) {
+        QString line = QString::fromUtf8(file.readLine()).trimmed();
+        const int comment = line.indexOf(QLatin1Char('#'));
+        if (comment >= 0) {
+            line.truncate(comment);
+            line = line.trimmed();
+        }
+        if (!line.isEmpty()) {
+            domains.push_back(line);
+        }
+    }
+    return domains;
+}
+
+QStringList loadDomains(int limit, const QString& filePath, QTextStream& err, bool* ok)
+{
+    if (ok) {
+        *ok = false;
+    }
+
+    QFile file(filePath.isEmpty() ? QStringLiteral(":/test_domains.txt") : filePath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        if (!filePath.isEmpty()) {
+            err << "--domains-file could not be opened: " << filePath << " (" << file.errorString() << ")\n";
+            return {};
         }
     }
 
+    QStringList domains = file.isOpen() ? readDomainLines(file) : QStringList();
+    if (!filePath.isEmpty() && domains.isEmpty()) {
+        err << "--domains-file contains no usable domains: " << filePath << '\n';
+        return {};
+    }
     if (domains.isEmpty()) {
         domains = {QStringLiteral("example.com"), QStringLiteral("qt.io"), QStringLiteral("cloudflare.com")};
     }
     if (limit > 0 && domains.size() > limit) {
         domains = domains.mid(0, limit);
+    }
+    if (ok) {
+        *ok = true;
     }
     return domains;
 }
@@ -171,6 +197,7 @@ int runHeadlessBenchmark(QCoreApplication& app)
     parser.addOption({QStringLiteral("concurrent"), QStringLiteral("Maximum resolvers benchmarked at once."), QStringLiteral("count"),
         QString::number(BenchmarkController::recommendedMaxConcurrentResolvers())});
     parser.addOption({QStringLiteral("domain-limit"), QStringLiteral("Limit test domains loaded from resources; 0 means all."), QStringLiteral("count"), QStringLiteral("0")});
+    parser.addOption({QStringLiteral("domains-file"), QStringLiteral("Load benchmark domains from a text file instead of the built-in list."), QStringLiteral("path")});
     parser.addOption({QStringLiteral("csv"), QStringLiteral("Print CSV instead of a Markdown table.")});
     parser.addOption({QStringLiteral("verbose"), QStringLiteral("Print per-query benchmark log lines to stderr.")});
     parser.process(app);
@@ -194,6 +221,12 @@ int runHeadlessBenchmark(QCoreApplication& app)
     const int domainLimit = parser.value(QStringLiteral("domain-limit")).toInt(&ok);
     if (!ok || domainLimit < 0) {
         err << "--domain-limit must be a non-negative integer\n";
+        return 2;
+    }
+
+    bool domainsOk = false;
+    const QStringList domains = loadDomains(domainLimit, parser.value(QStringLiteral("domains-file")), err, &domainsOk);
+    if (!domainsOk) {
         return 2;
     }
 
@@ -238,7 +271,7 @@ int runHeadlessBenchmark(QCoreApplication& app)
     QEventLoop loop;
     QObject::connect(&controller, &BenchmarkController::benchmarkFinished, &loop, &QEventLoop::quit);
 
-    controller.start(entries, samples, delayMs, loadDomains(domainLimit));
+    controller.start(entries, samples, delayMs, domains);
     loop.exec();
 
     out << (parser.isSet(QStringLiteral("csv"))

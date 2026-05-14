@@ -58,9 +58,9 @@ intel.com
 amd.com
 nvidia.com
 tesla.com
-cloud.google.com
-aws.amazon.com
-azure.microsoft.com
+googlecloud.com
+aws.com
+azure.com
 digitalocean.com
 heroku.com
 vercel.com

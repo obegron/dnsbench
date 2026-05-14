@@ -47,6 +47,7 @@ bool appendName(QByteArray& packet, const QString& domain)
 
 bool readName(const QByteArray& packet, int* offset, QString* outName)
 {
+    constexpr int maxCompressionJumps = 32;
     QStringList labels;
     int current = *offset;
     int jumps = 0;
@@ -55,7 +56,7 @@ bool readName(const QByteArray& packet, int* offset, QString* outName)
     while (current >= 0 && current < packet.size()) {
         const quint8 length = static_cast<quint8>(packet.at(current));
         if ((length & 0xc0) == 0xc0) {
-            if (current + 1 >= packet.size() || ++jumps > 16) {
+            if (current + 1 >= packet.size() || ++jumps > maxCompressionJumps) {
                 return false;
             }
             const quint16 pointer = static_cast<quint16>(((length & 0x3f) << 8)
@@ -169,6 +170,16 @@ bool DnsPacket::hasExpectedResponseId(const QByteArray& packet, quint16 transact
     const auto id = readUInt16(packet, 0);
     const auto flags = readUInt16(packet, 2);
     return id == transactionId && ((flags & 0x8000) != 0);
+}
+
+bool DnsPacket::isTruncatedResponse(const QByteArray& packet, quint16 transactionId)
+{
+    if (!hasExpectedResponseId(packet, transactionId)) {
+        return false;
+    }
+
+    const auto flags = readUInt16(packet, 2);
+    return (flags & 0x0200) != 0;
 }
 
 bool DnsPacket::authenticatedDataBit(const QByteArray& packet)

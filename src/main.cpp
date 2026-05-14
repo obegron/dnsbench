@@ -20,6 +20,8 @@ bool headlessRequested(int argc, char* argv[])
 
 void suppressRecoveredQtNetworkNoise()
 {
+    // Qt reads logging rules during application startup; set these before
+    // QCoreApplication exists so recovered HTTP/2 stream noise stays hidden.
     QByteArray rules = qgetenv("QT_LOGGING_RULES");
     if (!rules.isEmpty() && !rules.endsWith('\n') && !rules.endsWith(';')) {
         rules.append('\n');
