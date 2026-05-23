@@ -51,6 +51,26 @@ The Windows compile path supports manual resolvers in the GUI and headless
 mode. `--system-dns` currently prints a platform support message unless a
 Windows system DNS detector is added later.
 
+### macOS Compile
+
+Build macOS on a Mac with Xcode command line tools and Homebrew-provided Qt and
+OpenSSL. Cross-compiling a usable macOS app bundle from Linux is not supported
+because it needs Apple's SDK, frameworks, and deployment tooling.
+
+```sh
+xcode-select --install
+brew install cmake ninja qt openssl@3 nlohmann-json
+cmake -S . -B build-macos -G Ninja \
+  "-DCMAKE_PREFIX_PATH=$(brew --prefix qt);$(brew --prefix openssl@3)" \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build-macos
+ctest --test-dir build-macos --output-on-failure
+```
+
+The build produces `build-macos/dnsbench.app`. Manual and built-in resolvers
+should work; `--system-dns` and the GUI system DNS action currently report that
+platform detection is not implemented until a macOS detector is added.
+
 ## Run
 
 ```sh

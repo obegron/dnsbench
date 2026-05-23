@@ -74,6 +74,16 @@ target_link_libraries(dnsbench
         OpenSSL::Crypto
 )
 
+if(APPLE)
+    set_target_properties(dnsbench PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_BUNDLE_NAME "DNS Benchmark"
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+        MACOSX_BUNDLE_GUI_IDENTIFIER "dev.dnsbench.app"
+    )
+endif()
+
 install(TARGETS dnsbench
     BUNDLE DESTINATION .
     RUNTIME DESTINATION bin

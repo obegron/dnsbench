@@ -40,9 +40,11 @@ void preferSoftwareRendering()
     if (qEnvironmentVariableIsEmpty("QT_OPENGL")) {
         qputenv("QT_OPENGL", "software");
     }
+#if defined(Q_OS_WIN)
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
         qputenv("QT_QPA_PLATFORM", "windows:fontengine=freetype");
     }
+#endif
     QCoreApplication::setAttribute(Qt::AA_UseSoftwareOpenGL);
 }
 

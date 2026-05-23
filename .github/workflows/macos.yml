@@ -1,0 +1,42 @@
+name: macOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and test (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-13, macos-14, macos-15]
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install cmake ninja qt openssl@3 nlohmann-json
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-macos -G Ninja \
+            "-DCMAKE_PREFIX_PATH=$(brew --prefix qt);$(brew --prefix openssl@3)" \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build-macos
+
+      - name: Test
+        run: ctest --test-dir build-macos --output-on-failure
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: dnsbench-${{ matrix.runner }}
+          path: build-macos/dnsbench.app
