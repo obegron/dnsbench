@@ -53,10 +53,13 @@ set(DNSBENCH_APP_SOURCES
     src/benchmark/DohResolver.cpp
     src/benchmark/DotResolver.cpp
     src/benchmark/UdpResolver.cpp
-    src/detection/LinuxDnsDetector.cpp
     src/detection/SystemDnsDetector.cpp
     src/export/ResultExporter.cpp
 )
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND DNSBENCH_APP_SOURCES src/detection/LinuxDnsDetector.cpp)
+endif()
 
 qt_add_executable(dnsbench ${DNSBENCH_APP_SOURCES})
 target_include_directories(dnsbench PRIVATE src)
@@ -76,13 +79,15 @@ install(TARGETS dnsbench
     RUNTIME DESTINATION bin
 )
 
-install(FILES packaging/linux/dnsbench.desktop
-    DESTINATION share/applications
-)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    install(FILES packaging/linux/dnsbench.desktop
+        DESTINATION share/applications
+    )
 
-install(FILES resources/dnsbench.svg
-    DESTINATION share/icons/hicolor/scalable/apps
-)
+    install(FILES resources/dnsbench.svg
+        DESTINATION share/icons/hicolor/scalable/apps
+    )
+endif()
 
 enable_testing()
 
@@ -94,13 +99,15 @@ qt_add_executable(test_dns_packet tests/test_dns_packet.cpp)
 target_link_libraries(test_dns_packet PRIVATE dnsbench_core Qt6::Test)
 add_test(NAME test_dns_packet COMMAND test_dns_packet)
 
-qt_add_executable(test_dns_detection
-    tests/test_dns_detection.cpp
-    src/detection/LinuxDnsDetector.cpp
-)
-target_include_directories(test_dns_detection PRIVATE src)
-target_link_libraries(test_dns_detection PRIVATE dnsbench_core Qt6::Test)
-add_test(NAME test_dns_detection COMMAND test_dns_detection)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    qt_add_executable(test_dns_detection
+        tests/test_dns_detection.cpp
+        src/detection/LinuxDnsDetector.cpp
+    )
+    target_include_directories(test_dns_detection PRIVATE src)
+    target_link_libraries(test_dns_detection PRIVATE dnsbench_core Qt6::Test)
+    add_test(NAME test_dns_detection COMMAND test_dns_detection)
+endif()
 
 qt_add_executable(test_udp_benchmark
     tests/test_udp_benchmark.cpp

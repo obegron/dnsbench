@@ -70,6 +70,7 @@ private:
 
     void buildUi();
     void connectController();
+    void finishStartup();
     void detectSystemDns();
     void addBuiltInResolvers();
     void restoreBuiltInResolvers();

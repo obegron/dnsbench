@@ -17,6 +17,40 @@ cmake --build build -j4
 ctest --test-dir build --output-on-failure
 ```
 
+### Windows Compile
+
+Windows builds require Windows-targeted Qt6 and OpenSSL packages that match the
+compiler/toolchain used for CMake. The Linux Qt packages installed on a build
+host are not enough for cross-compiling. Wine can run the resulting Windows
+binary or tests, but it does not provide the headers, import libraries, or CMake
+package files needed to compile.
+
+Example with MinGW and an existing Windows dependency prefix:
+
+```sh
+cmake -S . -B build-windows -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/mingw64.cmake \
+  -DDNSBENCH_WINDOWS_PREFIX=/path/to/windows-prefix \
+  -DQT_HOST_PATH=/usr \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build-windows
+```
+
+`/path/to/windows-prefix` must contain Windows-targeted Qt6 Charts and OpenSSL
+CMake package files for the same MinGW triplet. `QT_HOST_PATH` should point at a
+native Qt6 install when the target Qt package needs host tools such as `moc` and
+`rcc`.
+
+To try the same compile in a container, use the Fedora-based cross-build target:
+
+```sh
+docker buildx bake windows
+```
+
+The Windows compile path supports manual resolvers in the GUI and headless
+mode. `--system-dns` currently prints a platform support message unless a
+Windows system DNS detector is added later.
+
 ## Run
 
 ```sh

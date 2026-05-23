@@ -33,16 +33,6 @@ QString protocolToString(ResolverProtocol protocol)
 
 QString protocolDisplayString(ResolverProtocol protocol)
 {
-    switch (protocol) {
-    case ResolverProtocol::IPv4:
-        return QString::fromUtf8("\xf0\x9f\x8c\x90 IPv4");
-    case ResolverProtocol::IPv6:
-        return QString::fromUtf8("\xf0\x9f\x8c\x90 IPv6");
-    case ResolverProtocol::DoH:
-        return QString::fromUtf8("\xf0\x9f\x94\x92 DoH");
-    case ResolverProtocol::DoT:
-        return QString::fromUtf8("\xf0\x9f\x94\x92 DoT");
-    }
     return protocolToString(protocol);
 }
 

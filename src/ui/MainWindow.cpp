@@ -1098,8 +1098,7 @@ MainWindow::MainWindow(QWidget* parent)
     buildUi();
     connectController();
     loadSettings();
-    detectSystemDns();
-    addBuiltInResolvers();
+    QTimer::singleShot(0, this, &MainWindow::finishStartup);
 }
 
 MainWindow::~MainWindow()
@@ -1190,7 +1189,7 @@ void MainWindow::buildUi()
     m_table->setSortingEnabled(true);
     m_table->sortByColumn(ResolverModel::MedianColumn, Qt::AscendingOrder);
     m_table->horizontalHeader()->setStretchLastSection(true);
-    m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     m_table->horizontalHeader()->setSectionResizeMode(ResolverModel::TimelineColumn, QHeaderView::Fixed);
     m_table->setColumnWidth(ResolverModel::TimelineColumn, 150);
     m_table->verticalHeader()->setVisible(false);
@@ -1390,6 +1389,15 @@ void MainWindow::connectController()
         }
         finishBenchmarkRun();
     });
+}
+
+void MainWindow::finishStartup()
+{
+    detectSystemDns();
+    addBuiltInResolvers();
+    m_table->resizeColumnsToContents();
+    m_table->horizontalHeader()->setSectionResizeMode(ResolverModel::TimelineColumn, QHeaderView::Fixed);
+    m_table->setColumnWidth(ResolverModel::TimelineColumn, 150);
 }
 
 void MainWindow::finishBenchmarkRun()

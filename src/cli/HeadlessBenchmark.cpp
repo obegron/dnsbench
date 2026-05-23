@@ -1,7 +1,7 @@
 #include "cli/HeadlessBenchmark.h"
 
 #include "benchmark/BenchmarkController.h"
-#include "detection/LinuxDnsDetector.h"
+#include "detection/SystemDnsDetector.h"
 #include "export/ResultExporter.h"
 #include "model/ResolverModel.h"
 
@@ -232,8 +232,12 @@ int runHeadlessBenchmark(QCoreApplication& app)
 
     QList<ResolverEntry> entries = parseManualResolvers(parser.values(QStringLiteral("resolver")), err);
     if (parser.isSet(QStringLiteral("system-dns"))) {
-        LinuxDnsDetector detector;
-        mergeUniqueResolvers(&entries, detector.detect());
+        std::unique_ptr<SystemDnsDetector> detector = createSystemDnsDetector();
+        if (detector) {
+            mergeUniqueResolvers(&entries, detector->detect());
+        } else {
+            err << "System DNS detection is not supported on this platform.\n";
+        }
     }
     if (entries.isEmpty()) {
         err << "No resolvers to benchmark. Use --system-dns or --resolver address[,protocol[,port[,name]]].\n";
