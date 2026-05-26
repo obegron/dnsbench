@@ -61,6 +61,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(APPEND DNSBENCH_APP_SOURCES src/detection/LinuxDnsDetector.cpp)
 endif()
 
+if(APPLE)
+    list(APPEND DNSBENCH_APP_SOURCES src/detection/MacDnsDetector.cpp)
+endif()
+
 qt_add_executable(dnsbench ${DNSBENCH_APP_SOURCES})
 target_include_directories(dnsbench PRIVATE src)
 target_link_libraries(dnsbench
