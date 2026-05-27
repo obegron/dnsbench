@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   macos-slice:
     name: macOS ${{ matrix.arch }}
@@ -46,60 +49,15 @@ jobs:
       - name: Package
         run: |
           "$(brew --prefix qt)/bin/macdeployqt" build-macos/dnsbench.app -always-overwrite
-          file build-macos/dnsbench.app/Contents/MacOS/dnsbench
-          mkdir -p "dist/macos-${{ matrix.arch }}"
-          cp -R build-macos/dnsbench.app "dist/macos-${{ matrix.arch }}/dnsbench.app"
+          /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion 12.0" build-macos/dnsbench.app/Contents/Info.plist || true
+          codesign --force --deep --sign - build-macos/dnsbench.app
+          ditto -c -k --keepParent build-macos/dnsbench.app "dnsbench-macos-${{ matrix.arch }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: dnsbench-macos-${{ matrix.arch }}
-          path: dist/macos-${{ matrix.arch }}
-
-  macos-universal:
-    name: macOS universal
-    needs: macos-slice
-    runs-on: macos-14
-
-    steps:
-      - name: Download app slices
-        uses: actions/download-artifact@v4
-        with:
-          pattern: dnsbench-macos-*
-          path: dist/macos-slices
-
-      - name: Merge slices
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          cp -R dist/macos-slices/dnsbench-macos-arm64/dnsbench.app dist/dnsbench.app
-
-          while IFS= read -r -d '' arm_file; do
-            rel="${arm_file#dist/dnsbench.app/}"
-            x64_file="dist/macos-slices/dnsbench-macos-x86_64/dnsbench.app/$rel"
-            if [[ ! -f "$x64_file" ]]; then
-              continue
-            fi
-            if ! file "$arm_file" | grep -q 'Mach-O'; then
-              continue
-            fi
-            if ! file "$x64_file" | grep -q 'Mach-O'; then
-              continue
-            fi
-            lipo -create "$x64_file" "$arm_file" -output "$arm_file.universal"
-            mv "$arm_file.universal" "$arm_file"
-          done < <(find dist/dnsbench.app -type f -print0)
-
-          /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion 12.0" dist/dnsbench.app/Contents/Info.plist || true
-          codesign --force --deep --sign - dist/dnsbench.app
-          file dist/dnsbench.app/Contents/MacOS/dnsbench
-          ditto -c -k --keepParent dist/dnsbench.app dist/dnsbench-macos-universal.zip
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: dnsbench-macos-universal
-          path: dist/dnsbench-macos-universal.zip
+          path: dnsbench-macos-${{ matrix.arch }}.zip
 
   linux:
     name: Linux ${{ matrix.arch }}
@@ -135,17 +93,13 @@ jobs:
 
       - name: Package
         run: |
-          sudo apt-get update
-          sudo apt-get install -y zip
-          mkdir -p dist/packages
           chmod +x "dist/linux-${{ matrix.arch }}/dnsbench"
-          (cd "dist/linux-${{ matrix.arch }}" && zip -r "../packages/dnsbench-linux-${{ matrix.arch }}.zip" .)
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: dnsbench-linux-${{ matrix.arch }}
-          path: dist/packages/dnsbench-linux-${{ matrix.arch }}.zip
+          path: dist/linux-${{ matrix.arch }}/dnsbench
 
   windows:
     name: Windows amd64
@@ -167,22 +121,15 @@ jobs:
             --output type=local,dest=dist/windows \
             .
 
-      - name: Package
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y zip
-          mkdir -p dist/packages
-          (cd dist/windows && zip -r ../packages/dnsbench-windows-amd64.zip .)
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: dnsbench-windows-amd64
-          path: dist/packages/dnsbench-windows-amd64.zip
+          path: dist/windows/
 
   publish:
     name: Publish GitHub release
-    needs: [macos-universal, linux, windows]
+    needs: [macos-slice, linux, windows]
     runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/')
 
@@ -192,13 +139,34 @@ jobs:
         with:
           path: dist/artifacts
 
+      - name: Prepare Release Assets
+        run: |
+          sudo apt-get update && sudo apt-get install -y zip
+          mkdir -p dist/release
+
+          # Linux
+          for arch in amd64 arm64; do
+            if [ -f "dist/artifacts/dnsbench-linux-$arch/dnsbench" ]; then
+              chmod +x "dist/artifacts/dnsbench-linux-$arch/dnsbench"
+              zip -j "dist/release/dnsbench-linux-$arch.zip" "dist/artifacts/dnsbench-linux-$arch/dnsbench"
+            fi
+          done
+
+          # Windows
+          if [ -d "dist/artifacts/dnsbench-windows-amd64" ]; then
+            (cd dist/artifacts/dnsbench-windows-amd64 && zip -r "../../release/dnsbench-windows-amd64.zip" .)
+          fi
+
+          # macOS (already zipped in the job to preserve metadata/permissions)
+          find dist/artifacts -name 'dnsbench-macos-*.zip' -exec cp {} dist/release/ \;
+
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
-          mapfile -t files < <(find dist/artifacts -name '*.zip' -type f | sort)
           gh release create "$TAG_NAME" \
-            "${files[@]}" \
+            dist/release/*.zip \
             --title "$TAG_NAME" \
             --notes "Unsigned DNSBench release artifacts."
+
