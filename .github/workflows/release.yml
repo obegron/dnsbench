@@ -47,12 +47,14 @@ jobs:
         run: |
           "$(brew --prefix qt)/bin/macdeployqt" build-macos/dnsbench.app -always-overwrite
           file build-macos/dnsbench.app/Contents/MacOS/dnsbench
+          mkdir -p "dist/macos-${{ matrix.arch }}"
+          cp -R build-macos/dnsbench.app "dist/macos-${{ matrix.arch }}/dnsbench.app"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: dnsbench-macos-${{ matrix.arch }}
-          path: build-macos/dnsbench.app
+          path: dist/macos-${{ matrix.arch }}
 
   macos-universal:
     name: macOS universal
@@ -63,6 +65,7 @@ jobs:
       - name: Download app slices
         uses: actions/download-artifact@v4
         with:
+          pattern: dnsbench-macos-*
           path: dist/macos-slices
 
       - name: Merge slices
