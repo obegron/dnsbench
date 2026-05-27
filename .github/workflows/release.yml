@@ -19,7 +19,7 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            runner: macos-13
+            runner: macos-14
           - arch: arm64
             runner: macos-14
 
@@ -34,6 +34,7 @@ jobs:
         run: |
           cmake -S . -B build-macos -G Ninja \
             "-DCMAKE_PREFIX_PATH=$(brew --prefix qt);$(brew --prefix openssl@3)" \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
