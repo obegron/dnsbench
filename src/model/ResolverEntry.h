@@ -48,6 +48,9 @@ struct ResolverEntry {
     QVector<ResolverSamplePoint> samples;
     QVector<QVector<ResolverSamplePoint>> passSamples;
     Statistics stats;
+    Statistics uncachedStats;
+    QVector<ResolverSamplePoint> uncachedSamples;
+    QVector<QVector<ResolverSamplePoint>> uncachedPassSamples;
 
     QString effectiveName() const;
 };

@@ -13,7 +13,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Network Gui Widgets Charts Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Network Gui Widgets Charts Sql Test)
 find_package(OpenSSL REQUIRED)
 find_package(nlohmann_json CONFIG QUIET)
 
@@ -78,6 +78,7 @@ target_link_libraries(dnsbench
         Qt6::Network
         Qt6::Widgets
         Qt6::Charts
+        Qt6::Sql
         OpenSSL::SSL
         OpenSSL::Crypto
 )

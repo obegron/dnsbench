@@ -205,8 +205,6 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
             return QBrush(QColor(130, 130, 130));
         }
         if (column == DnssecColumn
-            && entry.status == ResolverStatus::Finished
-            && entry.stats.hasSamples()
             && entry.dnssecAuthenticatedDataSeen) {
             return QBrush(QColor(25, 120, 55));
         }
@@ -214,6 +212,32 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
 
     if (role == HasSamplesRole) {
         return entry.stats.hasSamples();
+    }
+
+    if (role == HasUncachedSamplesRole) {
+        return entry.uncachedStats.hasSamples();
+    }
+
+    if (role == UncachedValueRole) {
+        switch (column) {
+        case MedianColumn:
+            return entry.uncachedStats.medianMs;
+        case P90Column:
+            return entry.uncachedStats.p90Ms;
+        case MeanColumn:
+            return entry.uncachedStats.meanMs;
+        case StddevColumn:
+            return entry.uncachedStats.stddevMs;
+        case MinColumn:
+            return entry.uncachedStats.minMs;
+        case MaxColumn:
+            return entry.uncachedStats.maxMs;
+        case LossColumn:
+            return entry.uncachedStats.lossPercent;
+        default:
+            break;
+        }
+        return {};
     }
 
     if (role == Qt::UserRole) {
@@ -272,12 +296,15 @@ QVariant ResolverModel::data(const QModelIndex& index, int role) const
     case MinColumn:
     case MaxColumn:
     case LossColumn:
-        return statData(entry.stats, column, role);
+        return statData(entry, column, role);
     case TimelineColumn:
         return QString();
     case DnssecColumn:
+        if (entry.dnssecAuthenticatedDataSeen) {
+            return QStringLiteral("AD seen");
+        }
         if (entry.status == ResolverStatus::Finished && entry.stats.hasSamples()) {
-            return entry.dnssecAuthenticatedDataSeen ? QStringLiteral("AD seen") : QStringLiteral("No AD");
+            return QStringLiteral("No AD");
         }
         return QStringLiteral("-");
     case StatusColumn:
@@ -428,7 +455,7 @@ void ResolverModel::removeRowsByIndexes(const QModelIndexList& indexes)
     }
 }
 
-void ResolverModel::updateStats(const QString& id, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples, const QVector<QVector<ResolverSamplePoint>>& passSamples)
+void ResolverModel::updateStats(const QString& id, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples, const QVector<QVector<ResolverSamplePoint>>& passSamples, const Statistics& uncachedStats, const QVector<ResolverSamplePoint>& uncachedSamples, const QVector<QVector<ResolverSamplePoint>>& uncachedPassSamples)
 {
     const int row = rowForId(id);
     if (row < 0) {
@@ -440,8 +467,11 @@ void ResolverModel::updateStats(const QString& id, const Statistics& stats, Reso
     m_entries[row].dnssecAuthenticatedDataSeen = dnssecAuthenticatedDataSeen;
     m_entries[row].samples = samples;
     m_entries[row].passSamples = passSamples;
+    m_entries[row].uncachedStats = uncachedStats;
+    m_entries[row].uncachedSamples = uncachedSamples;
+    m_entries[row].uncachedPassSamples = uncachedPassSamples;
     emit dataChanged(index(row, MedianColumn), index(row, StatusColumn),
-        {Qt::DisplayRole, Qt::UserRole, Qt::ForegroundRole, HasSamplesRole});
+        {Qt::DisplayRole, Qt::UserRole, Qt::ForegroundRole, HasSamplesRole, HasUncachedSamplesRole, UncachedValueRole});
     emit resolverChanged(m_entries[row]);
 }
 
@@ -500,6 +530,9 @@ void ResolverModel::resetRuntimeState()
         entry.dnssecAuthenticatedDataSeen = false;
         entry.samples.clear();
         entry.passSamples.clear();
+        entry.uncachedStats = {};
+        entry.uncachedSamples.clear();
+        entry.uncachedPassSamples.clear();
     }
     emit dataChanged(index(0, 0), index(m_entries.size() - 1, ColumnCount - 1));
 }
@@ -516,6 +549,9 @@ void ResolverModel::resetRuntimeState(const QString& id)
     m_entries[row].dnssecAuthenticatedDataSeen = false;
     m_entries[row].samples.clear();
     m_entries[row].passSamples.clear();
+    m_entries[row].uncachedStats = {};
+    m_entries[row].uncachedSamples.clear();
+    m_entries[row].uncachedPassSamples.clear();
     emit dataChanged(index(row, 0), index(row, StatusColumn));
     emit resolverChanged(m_entries[row]);
 }
@@ -571,8 +607,10 @@ int ResolverModel::rowForId(const QString& id) const
     return -1;
 }
 
-QVariant ResolverModel::statData(const Statistics& stats, Column column, int role) const
+QVariant ResolverModel::statData(const ResolverEntry& entry, Column column, int role) const
 {
+    const Statistics& stats = entry.stats;
+    const Statistics& uncachedStats = entry.uncachedStats;
     if (stats.totalCount == 0) {
         return role == Qt::DisplayRole ? QStringLiteral("-") : QVariant();
     }
@@ -592,6 +630,37 @@ QVariant ResolverModel::statData(const Statistics& stats, Column column, int rol
         default:
             return {};
         }
+    }
+
+    auto formatValue = [&locale](const Statistics& source, Column statColumn) {
+        if (source.totalCount == 0) {
+            return QStringLiteral("-");
+        }
+        if (source.successCount == 0 && statColumn != LossColumn) {
+            return QStringLiteral("-");
+        }
+        switch (statColumn) {
+        case MedianColumn:
+            return locale.toString(source.medianMs, 'f', 1);
+        case P90Column:
+            return locale.toString(source.p90Ms, 'f', 1);
+        case MeanColumn:
+            return locale.toString(source.meanMs, 'f', 1);
+        case StddevColumn:
+            return locale.toString(source.stddevMs, 'f', 1);
+        case MinColumn:
+            return locale.toString(source.minMs, 'f', 1);
+        case MaxColumn:
+            return locale.toString(source.maxMs, 'f', 1);
+        case LossColumn:
+            return locale.toString(source.lossPercent, 'f', 1);
+        default:
+            return QString();
+        }
+    };
+
+    if (role == Qt::DisplayRole && uncachedStats.totalCount > 0) {
+        return QStringLiteral("%1 / %2").arg(formatValue(stats, column), formatValue(uncachedStats, column));
     }
 
     switch (column) {

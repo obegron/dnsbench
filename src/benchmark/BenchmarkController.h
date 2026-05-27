@@ -20,7 +20,7 @@ public:
     explicit BenchmarkController(QObject* parent = nullptr);
     ~BenchmarkController() override;
 
-    void start(const QList<ResolverEntry>& resolvers, int sampleCount, int interQueryDelayMs, QStringList domains, bool primeCache = true);
+    void start(const QList<ResolverEntry>& resolvers, int sampleCount, int interQueryDelayMs, QStringList domains, bool primeCache = true, bool includeUncached = false);
     void stop();
     bool isRunning() const;
     void setMaxConcurrentResolvers(int maxConcurrentResolvers);
@@ -29,7 +29,7 @@ public:
 
 signals:
     void progressUpdated(int completed, int total, qint64 elapsedMs);
-    void resolverFinished(const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples);
+    void resolverFinished(const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples, const Statistics& uncachedStats, const QVector<ResolverSamplePoint>& uncachedSamples);
     void resolverStatusChanged(const QString& resolverId, ResolverStatus status);
     void logLine(const QString& line);
     void benchmarkFinished();

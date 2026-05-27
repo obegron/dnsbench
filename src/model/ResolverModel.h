@@ -28,7 +28,9 @@ public:
     };
 
     enum Role {
-        HasSamplesRole = Qt::UserRole + 1
+        HasSamplesRole = Qt::UserRole + 1,
+        UncachedValueRole,
+        HasUncachedSamplesRole
     };
 
     explicit ResolverModel(QObject* parent = nullptr);
@@ -44,7 +46,7 @@ public:
     void addResolvers(const QList<ResolverEntry>& entries, bool prepend = false);
     void clear();
     void removeRowsByIndexes(const QModelIndexList& indexes);
-    void updateStats(const QString& id, const Statistics& stats, ResolverStatus status = ResolverStatus::Finished, bool dnssecAuthenticatedDataSeen = false, const QVector<ResolverSamplePoint>& samples = {}, const QVector<QVector<ResolverSamplePoint>>& passSamples = {});
+    void updateStats(const QString& id, const Statistics& stats, ResolverStatus status = ResolverStatus::Finished, bool dnssecAuthenticatedDataSeen = false, const QVector<ResolverSamplePoint>& samples = {}, const QVector<QVector<ResolverSamplePoint>>& passSamples = {}, const Statistics& uncachedStats = {}, const QVector<ResolverSamplePoint>& uncachedSamples = {}, const QVector<QVector<ResolverSamplePoint>>& uncachedPassSamples = {});
     void updateStatus(const QString& id, ResolverStatus status);
     void setResolverEnabled(const QString& id, bool enabled);
     void setProtocolEnabled(ResolverProtocol protocol, bool enabled);
@@ -65,5 +67,5 @@ private:
     QList<ResolverEntry> m_entries;
 
     int rowForId(const QString& id) const;
-    QVariant statData(const Statistics& stats, Column column, int role) const;
+    QVariant statData(const ResolverEntry& entry, Column column, int role) const;
 };

@@ -9,6 +9,7 @@
 #include <QLogValueAxis>
 #include <QPainter>
 #include <QScatterSeries>
+#include <QStringList>
 #include <QValueAxis>
 #include <QVBoxLayout>
 
@@ -24,9 +25,22 @@ QChart* createTimelineChart(const ResolverEntry& entry, bool large, bool overlay
             ? QStringLiteral("%1 response timeline (passes overlaid)").arg(entry.effectiveName())
             : QStringLiteral("%1 response timeline").arg(entry.effectiveName()));
 
-    const QVector<QVector<ResolverSamplePoint>> passes = entry.passSamples.isEmpty()
+    QVector<QVector<ResolverSamplePoint>> passes = entry.passSamples.isEmpty()
         ? QVector<QVector<ResolverSamplePoint>>{entry.samples}
         : entry.passSamples;
+    QStringList passNames;
+    if (!entry.uncachedSamples.isEmpty()) {
+        if (entry.uncachedPassSamples.isEmpty()) {
+            if (entry.passSamples.isEmpty()) {
+                passNames = {QStringLiteral("Cached"), QStringLiteral("Uncached")};
+            }
+            passes.push_back(entry.uncachedSamples);
+        } else {
+            for (const QVector<ResolverSamplePoint>& samples : entry.uncachedPassSamples) {
+                passes.push_back(samples);
+            }
+        }
+    }
 
     QList<QLineSeries*> rttSeries;
     auto* lossSeries = new QScatterSeries(chart);
@@ -49,9 +63,11 @@ QChart* createTimelineChart(const ResolverEntry& entry, bool large, bool overlay
     int sampleOffset = 0;
     for (int pass = 0; pass < passes.size(); ++pass) {
         auto* series = new QLineSeries(chart);
-        series->setName(passes.size() > 1
-                ? QStringLiteral("Pass %1").arg(pass + 1)
-                : QStringLiteral("RTT (ms, log scale)"));
+        series->setName(pass < passNames.size()
+                ? passNames.at(pass)
+                : (passes.size() > 1
+                    ? QStringLiteral("Pass %1").arg(pass + 1)
+                    : QStringLiteral("RTT (ms, log scale)")));
         series->setColor(colors.at(pass % colors.size()));
 
         const QVector<ResolverSamplePoint>& samples = passes.at(pass);
@@ -124,7 +140,7 @@ void openTimelineChartDialog(QWidget* parent, const ResolverEntry& entry)
     chartView->setRenderHint(QPainter::Antialiasing);
 
     auto* overlayToggle = new QCheckBox(QStringLiteral("Overlay passes"), dialog);
-    overlayToggle->setEnabled(entry.passSamples.size() > 1);
+    overlayToggle->setEnabled(entry.passSamples.size() > 1 || !entry.uncachedSamples.isEmpty());
     overlayToggle->setToolTip(QStringLiteral("Draw each pass against the same sample numbers instead of end-to-end."));
     QObject::connect(overlayToggle, &QCheckBox::toggled, chartView, [chartView, entry](bool checked) {
         chartView->setChart(createTimelineChart(entry, true, checked));

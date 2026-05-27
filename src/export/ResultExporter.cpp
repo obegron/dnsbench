@@ -48,6 +48,10 @@ bool resultLessThan(const ResolverEntry& left, const ResolverEntry& right)
     if (left.stats.medianMs != right.stats.medianMs) {
         return left.stats.medianMs < right.stats.medianMs;
     }
+    if (left.uncachedStats.hasSamples() && right.uncachedStats.hasSamples()
+        && left.uncachedStats.medianMs != right.uncachedStats.medianMs) {
+        return left.uncachedStats.medianMs < right.uncachedStats.medianMs;
+    }
     if (left.stats.p90Ms != right.stats.p90Ms) {
         return left.stats.p90Ms < right.stats.p90Ms;
     }
@@ -141,7 +145,7 @@ QString ResultExporter::toCsv(const QList<ResolverEntry>& entries)
     const QHash<QString, int> ranks = ranksFor(entries);
     QString out;
     QTextStream stream(&out);
-    stream << "Rank,Display Name,Address,Protocol,Median (ms),P90 (ms),Mean (ms),Stddev,Min,Max,Loss (%),DNSSEC,Status,Verdict\n";
+    stream << "Rank,Display Name,Address,Protocol,Cached Median (ms),Cached P90 (ms),Cached Mean (ms),Cached Stddev,Cached Min,Cached Max,Cached Loss (%),Uncached Median (ms),Uncached P90 (ms),Uncached Mean (ms),Uncached Stddev,Uncached Min,Uncached Max,Uncached Loss (%),DNSSEC,Status,Verdict\n";
     for (const ResolverEntry& entry : entries) {
         const int rank = ranks.value(entry.id, 0);
         stream << (rank > 0 ? QString::number(rank) : QString()) << ','
@@ -155,6 +159,13 @@ QString ResultExporter::toCsv(const QList<ResolverEntry>& entries)
                << formatStat(entry.stats.minMs) << ','
                << formatStat(entry.stats.maxMs) << ','
                << formatStat(entry.stats.lossPercent) << ','
+               << formatStat(entry.uncachedStats.medianMs) << ','
+               << formatStat(entry.uncachedStats.p90Ms) << ','
+               << formatStat(entry.uncachedStats.meanMs) << ','
+               << formatStat(entry.uncachedStats.stddevMs) << ','
+               << formatStat(entry.uncachedStats.minMs) << ','
+               << formatStat(entry.uncachedStats.maxMs) << ','
+               << formatStat(entry.uncachedStats.lossPercent) << ','
                << csvEscape(dnssecFor(entry)) << ','
                << statusToString(entry.status) << ','
                << csvEscape(verdictFor(entry, rank)) << '\n';
@@ -168,8 +179,8 @@ QString ResultExporter::toTextTable(const QList<ResolverEntry>& entries)
     const QList<ResolverEntry> sortedEntries = markdownEntriesFor(entries);
     QString out;
     QTextStream stream(&out);
-    stream << "| Rank | Name | Address | Proto | Median | P90 | Mean | Stddev | Min | Max | Loss | DNSSEC | Status | Verdict |\n";
-    stream << "|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n";
+    stream << "| Rank | Name | Address | Proto | Cached Median | Cached P90 | Cached Loss | Uncached Median | Uncached P90 | Uncached Loss | DNSSEC | Status | Verdict |\n";
+    stream << "|---:|---|---|---|---:|---:|---:|---:|---:|---:|---|---|---|\n";
     for (const ResolverEntry& entry : sortedEntries) {
         const int rank = ranks.value(entry.id, 0);
         stream << "| "
@@ -179,11 +190,10 @@ QString ResultExporter::toTextTable(const QList<ResolverEntry>& entries)
                << protocolToString(entry.protocol) << " | "
                << formatStat(entry.stats.medianMs) << " | "
                << formatStat(entry.stats.p90Ms) << " | "
-               << formatStat(entry.stats.meanMs) << " | "
-               << formatStat(entry.stats.stddevMs) << " | "
-               << formatStat(entry.stats.minMs) << " | "
-               << formatStat(entry.stats.maxMs) << " | "
                << formatStat(entry.stats.lossPercent) << "% | "
+               << formatStat(entry.uncachedStats.medianMs) << " | "
+               << formatStat(entry.uncachedStats.p90Ms) << " | "
+               << formatStat(entry.uncachedStats.lossPercent) << "% | "
                << markdownEscape(dnssecFor(entry)) << " | "
                << statusToString(entry.status) << " | "
                << markdownEscape(verdictFor(entry, rank)) << " |\n";

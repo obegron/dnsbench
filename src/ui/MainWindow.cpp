@@ -13,6 +13,7 @@
 #include <QDateTime>
 #include <QDialog>
 #include <QComboBox>
+#include <QDir>
 #include <QEvent>
 #include <QFile>
 #include <QFileDialog>
@@ -21,6 +22,7 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QHostAddress>
+#include <QInputDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -38,10 +40,14 @@
 #include <QSettings>
 #include <QSet>
 #include <QSignalBlocker>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
 #include <QSortFilterProxyModel>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStandardItemModel>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyle>
 #include <QStyledItemDelegate>
@@ -53,6 +59,7 @@
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
+#include <QTemporaryFile>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -66,6 +73,8 @@ namespace {
 
 constexpr int renderedMarkdownRowLimit = 250;
 constexpr int maxModelUpdatesPerFlush = 50;
+constexpr int browserImportDefaultLimit = 100;
+constexpr int browserImportLookbackDays = 30;
 
 enum class ResultFilter {
     All = 0,
@@ -73,6 +82,219 @@ enum class ResultFilter {
     UnreliableOnly = 2,
     NoResultOnly = 3
 };
+
+struct BrowserHistorySource {
+    QString browserName;
+    QString profileName;
+    QString historyPath;
+
+    QString label() const
+    {
+        return QStringLiteral("%1 - %2").arg(browserName, profileName);
+    }
+};
+
+struct BrowserDomainStats {
+    QString domain;
+    int visits = 0;
+    int typed = 0;
+    qint64 lastVisitTime = 0;
+};
+
+void addChromiumHistorySources(QList<BrowserHistorySource>* sources, const QString& browserName, const QString& userDataRoot)
+{
+    const QDir root(userDataRoot);
+    if (!root.exists()) {
+        return;
+    }
+
+    auto addProfile = [&](const QString& profileName, const QString& historyPath) {
+        if (!QFileInfo::exists(historyPath)) {
+            return;
+        }
+        if (profileName == QLatin1String("System Profile")) {
+            return;
+        }
+        sources->push_back(BrowserHistorySource{browserName, profileName, historyPath});
+    };
+
+    addProfile(QStringLiteral("Default"), root.filePath(QStringLiteral("History")));
+    const QFileInfoList profileDirs = root.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable);
+    for (const QFileInfo& profileDir : profileDirs) {
+        const QString profileName = profileDir.fileName();
+        addProfile(profileName, QDir(profileDir.absoluteFilePath()).filePath(QStringLiteral("History")));
+    }
+}
+
+QList<BrowserHistorySource> browserHistorySources()
+{
+    QList<BrowserHistorySource> sources;
+    const QString home = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+#if defined(Q_OS_WIN)
+    const QString localBase = QString::fromLocal8Bit(qgetenv("LOCALAPPDATA"));
+    const QString roamingBase = QString::fromLocal8Bit(qgetenv("APPDATA"));
+    addChromiumHistorySources(&sources, QStringLiteral("Chrome"), QDir(localBase).filePath(QStringLiteral("Google/Chrome/User Data")));
+    addChromiumHistorySources(&sources, QStringLiteral("Chrome Beta"), QDir(localBase).filePath(QStringLiteral("Google/Chrome Beta/User Data")));
+    addChromiumHistorySources(&sources, QStringLiteral("Chrome Dev"), QDir(localBase).filePath(QStringLiteral("Google/Chrome Dev/User Data")));
+    addChromiumHistorySources(&sources, QStringLiteral("Chromium"), QDir(localBase).filePath(QStringLiteral("Chromium/User Data")));
+    addChromiumHistorySources(&sources, QStringLiteral("Brave"), QDir(localBase).filePath(QStringLiteral("BraveSoftware/Brave-Browser/User Data")));
+    addChromiumHistorySources(&sources, QStringLiteral("Brave Nightly"), QDir(localBase).filePath(QStringLiteral("BraveSoftware/Brave-Browser-Nightly/User Data")));
+    addChromiumHistorySources(&sources, QStringLiteral("Edge"), QDir(localBase).filePath(QStringLiteral("Microsoft/Edge/User Data")));
+    addChromiumHistorySources(&sources, QStringLiteral("Edge Beta"), QDir(localBase).filePath(QStringLiteral("Microsoft/Edge Beta/User Data")));
+    addChromiumHistorySources(&sources, QStringLiteral("Edge Dev"), QDir(localBase).filePath(QStringLiteral("Microsoft/Edge Dev/User Data")));
+    addChromiumHistorySources(&sources, QStringLiteral("Vivaldi"), QDir(localBase).filePath(QStringLiteral("Vivaldi/User Data")));
+    addChromiumHistorySources(&sources, QStringLiteral("Opera"), QDir(roamingBase).filePath(QStringLiteral("Opera Software/Opera Stable")));
+#elif defined(Q_OS_MACOS)
+    const QDir appSupport(QDir(home).filePath(QStringLiteral("Library/Application Support")));
+    addChromiumHistorySources(&sources, QStringLiteral("Chrome"), appSupport.filePath(QStringLiteral("Google/Chrome")));
+    addChromiumHistorySources(&sources, QStringLiteral("Chrome Beta"), appSupport.filePath(QStringLiteral("Google/Chrome Beta")));
+    addChromiumHistorySources(&sources, QStringLiteral("Chrome Dev"), appSupport.filePath(QStringLiteral("Google/Chrome Dev")));
+    addChromiumHistorySources(&sources, QStringLiteral("Chromium"), appSupport.filePath(QStringLiteral("Chromium")));
+    addChromiumHistorySources(&sources, QStringLiteral("Brave"), appSupport.filePath(QStringLiteral("BraveSoftware/Brave-Browser")));
+    addChromiumHistorySources(&sources, QStringLiteral("Brave Nightly"), appSupport.filePath(QStringLiteral("BraveSoftware/Brave-Browser-Nightly")));
+    addChromiumHistorySources(&sources, QStringLiteral("Edge"), appSupport.filePath(QStringLiteral("Microsoft Edge")));
+    addChromiumHistorySources(&sources, QStringLiteral("Edge Beta"), appSupport.filePath(QStringLiteral("Microsoft Edge Beta")));
+    addChromiumHistorySources(&sources, QStringLiteral("Edge Dev"), appSupport.filePath(QStringLiteral("Microsoft Edge Dev")));
+    addChromiumHistorySources(&sources, QStringLiteral("Vivaldi"), appSupport.filePath(QStringLiteral("Vivaldi")));
+    addChromiumHistorySources(&sources, QStringLiteral("Opera"), appSupport.filePath(QStringLiteral("com.operasoftware.Opera")));
+#else
+    const QDir config(QDir(home).filePath(QStringLiteral(".config")));
+    addChromiumHistorySources(&sources, QStringLiteral("Chrome"), config.filePath(QStringLiteral("google-chrome")));
+    addChromiumHistorySources(&sources, QStringLiteral("Chrome Beta"), config.filePath(QStringLiteral("google-chrome-beta")));
+    addChromiumHistorySources(&sources, QStringLiteral("Chrome Unstable"), config.filePath(QStringLiteral("google-chrome-unstable")));
+    addChromiumHistorySources(&sources, QStringLiteral("Chromium"), config.filePath(QStringLiteral("chromium")));
+    addChromiumHistorySources(&sources, QStringLiteral("Brave"), config.filePath(QStringLiteral("BraveSoftware/Brave-Browser")));
+    addChromiumHistorySources(&sources, QStringLiteral("Brave Nightly"), config.filePath(QStringLiteral("BraveSoftware/Brave-Browser-Nightly")));
+    addChromiumHistorySources(&sources, QStringLiteral("Brave Origin Nightly"), config.filePath(QStringLiteral("BraveSoftware/Brave-Origin-Nightly")));
+    addChromiumHistorySources(&sources, QStringLiteral("Edge"), config.filePath(QStringLiteral("microsoft-edge")));
+    addChromiumHistorySources(&sources, QStringLiteral("Edge Beta"), config.filePath(QStringLiteral("microsoft-edge-beta")));
+    addChromiumHistorySources(&sources, QStringLiteral("Edge Dev"), config.filePath(QStringLiteral("microsoft-edge-dev")));
+    addChromiumHistorySources(&sources, QStringLiteral("Vivaldi"), config.filePath(QStringLiteral("vivaldi")));
+    addChromiumHistorySources(&sources, QStringLiteral("Opera"), config.filePath(QStringLiteral("opera")));
+    addChromiumHistorySources(&sources, QStringLiteral("Chromium Snap"), QDir(home).filePath(QStringLiteral("snap/chromium/common/chromium")));
+#endif
+
+    std::sort(sources.begin(), sources.end(), [](const BrowserHistorySource& left, const BrowserHistorySource& right) {
+        const int browserCompare = QString::localeAwareCompare(left.browserName, right.browserName);
+        if (browserCompare != 0) {
+            return browserCompare < 0;
+        }
+        return QString::localeAwareCompare(left.profileName, right.profileName) < 0;
+    });
+    return sources;
+}
+
+QString normalizedBrowserDomain(const QString& urlText)
+{
+    const QUrl url(urlText);
+    QString host = url.host(QUrl::FullyDecoded).trimmed().toLower();
+    while (host.endsWith(QLatin1Char('.'))) {
+        host.chop(1);
+    }
+    if (host.startsWith(QStringLiteral("www."))) {
+        host = host.mid(4);
+    }
+
+    QHostAddress address;
+    if (host.isEmpty() || !host.contains(QLatin1Char('.')) || address.setAddress(host)) {
+        return {};
+    }
+    return host;
+}
+
+QStringList domainsFromChromiumHistory(const QString& historyPath, int limit, int lookbackDays, QString* error)
+{
+    QTemporaryFile copy(QDir::tempPath() + QStringLiteral("/dnsbench-browser-history-XXXXXX.sqlite"));
+    copy.setAutoRemove(true);
+    if (!copy.open()) {
+        if (error) {
+            *error = copy.errorString();
+        }
+        return {};
+    }
+    const QString copyPath = copy.fileName();
+    copy.close();
+    QFile::remove(copyPath);
+    if (!QFile::copy(historyPath, copyPath)) {
+        if (error) {
+            *error = QStringLiteral("Could not copy browser history database. Close the browser and try again if the profile is locked.");
+        }
+        return {};
+    }
+
+    const QString connectionName = QStringLiteral("browser-history-%1").arg(reinterpret_cast<quintptr>(&copy));
+    QStringList result;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        db.setDatabaseName(copyPath);
+        if (!db.open()) {
+            if (error) {
+                *error = db.lastError().text();
+            }
+            db = {};
+            QSqlDatabase::removeDatabase(connectionName);
+            return {};
+        }
+
+        const qint64 chromeEpochDeltaSeconds = 11644473600LL;
+        const qint64 cutoff = (QDateTime::currentDateTimeUtc().addDays(-lookbackDays).toSecsSinceEpoch() + chromeEpochDeltaSeconds) * 1000000LL;
+
+        QSqlQuery query(db);
+        query.prepare(QStringLiteral(
+            "SELECT url, visit_count, typed_count, last_visit_time "
+            "FROM urls "
+            "WHERE last_visit_time >= ? "
+            "ORDER BY visit_count DESC, typed_count DESC, last_visit_time DESC "
+            "LIMIT 5000"));
+        query.addBindValue(cutoff);
+        if (!query.exec()) {
+            if (error) {
+                *error = query.lastError().text();
+            }
+            db.close();
+            db = {};
+            QSqlDatabase::removeDatabase(connectionName);
+            return {};
+        }
+
+        QHash<QString, BrowserDomainStats> domains;
+        while (query.next()) {
+            const QString domain = normalizedBrowserDomain(query.value(0).toString());
+            if (domain.isEmpty()) {
+                continue;
+            }
+            BrowserDomainStats& stats = domains[domain];
+            stats.domain = domain;
+            stats.visits += std::max(1, query.value(1).toInt());
+            stats.typed += query.value(2).toInt();
+            stats.lastVisitTime = std::max(stats.lastVisitTime, query.value(3).toLongLong());
+        }
+
+        QList<BrowserDomainStats> ranked = domains.values();
+        std::sort(ranked.begin(), ranked.end(), [](const BrowserDomainStats& left, const BrowserDomainStats& right) {
+            const int leftScore = left.visits + left.typed * 3;
+            const int rightScore = right.visits + right.typed * 3;
+            if (leftScore != rightScore) {
+                return leftScore > rightScore;
+            }
+            if (left.lastVisitTime != right.lastVisitTime) {
+                return left.lastVisitTime > right.lastVisitTime;
+            }
+            return left.domain < right.domain;
+        });
+
+        for (const BrowserDomainStats& domain : ranked) {
+            result.push_back(domain.domain);
+            if (result.size() >= limit) {
+                break;
+            }
+        }
+
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+    return result;
+}
 
 enum class BenchmarkProfile {
     Conservative = 0,
@@ -186,7 +408,10 @@ protected:
         case ResolverModel::MinColumn:
         case ResolverModel::MaxColumn:
         case ResolverModel::LossColumn:
-            return left.data(Qt::UserRole).toDouble() < right.data(Qt::UserRole).toDouble();
+            if (left.data(Qt::UserRole).toDouble() != right.data(Qt::UserRole).toDouble()) {
+                return left.data(Qt::UserRole).toDouble() < right.data(Qt::UserRole).toDouble();
+            }
+            return left.data(ResolverModel::UncachedValueRole).toDouble() < right.data(ResolverModel::UncachedValueRole).toDouble();
         case ResolverModel::TimelineColumn:
             return left.sibling(left.row(), ResolverModel::MedianColumn).data(Qt::UserRole).toDouble()
                 < right.sibling(right.row(), ResolverModel::MedianColumn).data(Qt::UserRole).toDouble();
@@ -1036,6 +1261,10 @@ bool resultLessThan(const ResolverEntry& left, const ResolverEntry& right)
     if (left.stats.medianMs != right.stats.medianMs) {
         return left.stats.medianMs < right.stats.medianMs;
     }
+    if (left.uncachedStats.hasSamples() && right.uncachedStats.hasSamples()
+        && left.uncachedStats.medianMs != right.uncachedStats.medianMs) {
+        return left.uncachedStats.medianMs < right.uncachedStats.medianMs;
+    }
     if (left.stats.p90Ms != right.stats.p90Ms) {
         return left.stats.p90Ms < right.stats.p90Ms;
     }
@@ -1179,11 +1408,11 @@ void MainWindow::applyToolbarTheme()
 
 void MainWindow::updateRunAction()
 {
-    if (!m_runAction) {
+    if (!m_runButton) {
         return;
     }
-    m_runAction->setText(m_controller.isRunning() ? QStringLiteral("Stop") : QStringLiteral("Start"));
-    m_runAction->setToolTip(m_controller.isRunning()
+    m_runButton->setText(m_controller.isRunning() ? QStringLiteral("Stop") : QStringLiteral("Start"));
+    m_runButton->setToolTip(m_controller.isRunning()
             ? QStringLiteral("Stop the current benchmark")
             : QStringLiteral("Start the benchmark"));
 }
@@ -1264,13 +1493,17 @@ void MainWindow::buildUi()
     toolbar->setObjectName(QStringLiteral("benchmarkToolbar"));
     toolbar->setMovable(false);
     toolbar->setIconSize(QSize(16, 16));
-    m_runAction = toolbar->addAction(QStringLiteral("Start"), this, [this]() {
+    auto* runButton = new QPushButton(QStringLiteral("Start"), this);
+    runButton->setMinimumWidth(80);
+    connect(runButton, &QPushButton::clicked, this, [this]() {
         if (m_controller.isRunning()) {
             stopBenchmark();
         } else {
             startBenchmark();
         }
     });
+    toolbar->addWidget(runButton);
+    m_runButton = runButton;
     toolbar->addSeparator();
 
     auto* resolverMenu = new QMenu(toolbar);
@@ -1287,6 +1520,8 @@ void MainWindow::buildUi()
     addMenuButton(toolbar, QStringLiteral("Results"), resultsMenu);
 
     auto* sitesMenu = new QMenu(toolbar);
+    sitesMenu->addAction(QStringLiteral("Save Test Sites"), this, &MainWindow::saveTestSites);
+    sitesMenu->addAction(QStringLiteral("Import from Browser"), this, &MainWindow::importSitesFromBrowser);
     sitesMenu->addAction(QStringLiteral("Reset Test Sites"), this, &MainWindow::resetTestSites);
     addMenuButton(toolbar, QStringLiteral("Sites"), sitesMenu);
     toolbar->addSeparator();
@@ -1295,8 +1530,12 @@ void MainWindow::buildUi()
     m_ipv6Toggle = new QCheckBox(QStringLiteral("IPv6"), this);
     m_dohToggle = new QCheckBox(QStringLiteral("DoH"), this);
     m_dotToggle = new QCheckBox(QStringLiteral("DoT"), this);
-    for (QCheckBox* box : {m_ipv4Toggle, m_ipv6Toggle, m_dohToggle, m_dotToggle}) {
-        box->setChecked(true);
+    m_uncachedToggle = new QCheckBox(QStringLiteral("Uncached"), this);
+    m_uncachedToggle->setToolTip(QStringLiteral("Also run a second pass with random names under wildcard DNS zones."));
+    for (QCheckBox* box : {m_ipv4Toggle, m_ipv6Toggle, m_dohToggle, m_dotToggle, m_uncachedToggle}) {
+        if (box != m_uncachedToggle) {
+            box->setChecked(true);
+        }
         toolbar->addWidget(box);
     }
     toolbar->addSeparator();
@@ -1450,7 +1689,10 @@ void MainWindow::applyRepeatedPassAggregates()
             ResolverStatus::Finished,
             dnssecAuthenticatedDataSeen,
             combinedSamples,
-            passSamples);
+            passSamples,
+            aggregateStatsForPasses(m_repeatUncachedPassSamples.value(entry.id), m_repeatUncachedPassStats.value(entry.id)),
+            combinePassSamples(m_repeatUncachedPassSamples.value(entry.id)),
+            m_repeatUncachedPassSamples.value(entry.id));
     }
 }
 
@@ -1472,7 +1714,7 @@ void MainWindow::startBenchmarkPass(bool resetRuntimeState)
     m_controller.setVerboseLogging(m_verboseLogToggle->isChecked());
     m_controller.setMaxConcurrentResolvers(BenchmarkController::recommendedMaxConcurrentResolvers());
     const bool primeCache = m_requestedPasses <= 1 || m_currentPass <= 1;
-    m_controller.start(m_repeatRunEntries, m_sampleSpin->value(), m_delaySpin->value(), loadDomains(), primeCache);
+    m_controller.start(m_repeatRunEntries, m_sampleSpin->value(), m_delaySpin->value(), loadDomains(), primeCache, m_uncachedToggle->isChecked());
     updateRunAction();
 }
 
@@ -1483,6 +1725,8 @@ void MainWindow::beginBenchmarkRun(const QList<ResolverEntry>& runEntries, const
     m_pendingStatusUpdates.clear();
     m_repeatPassStats.clear();
     m_repeatPassSamples.clear();
+    m_repeatUncachedPassStats.clear();
+    m_repeatUncachedPassSamples.clear();
     m_repeatRunEntries = runEntries;
     m_requestedPasses = m_passSpin->value();
     m_currentPass = 1;
@@ -1758,6 +2002,83 @@ void MainWindow::cloneResults()
     dialog->show();
 }
 
+void MainWindow::saveTestSites()
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("benchmark/testSites"), m_domainsEditor->toPlainText());
+    appendLogLine(QStringLiteral("Saved test site list."));
+    QMessageBox::information(this, QStringLiteral("Sites Saved"), QStringLiteral("The current Sites list has been saved."));
+}
+
+void MainWindow::importSitesFromBrowser()
+{
+    if (m_controller.isRunning()) {
+        QMessageBox::information(this, QStringLiteral("Benchmark Running"), QStringLiteral("Stop the current benchmark before importing test sites."));
+        return;
+    }
+
+    const QList<BrowserHistorySource> sources = browserHistorySources();
+    if (sources.isEmpty()) {
+        QMessageBox::information(
+            this,
+            QStringLiteral("No Browser History Found"),
+            QStringLiteral("No Chromium-family browser history databases were found. Supported profiles include Chrome, Chromium, Brave, Edge, Vivaldi, and Opera."));
+        return;
+    }
+
+    QStringList labels;
+    labels.reserve(sources.size());
+    for (const BrowserHistorySource& source : sources) {
+        labels.push_back(QStringLiteral("%1 (%2)").arg(source.label(), source.historyPath));
+    }
+
+    bool ok = false;
+    const QString selected = QInputDialog::getItem(
+        this,
+        QStringLiteral("Import Sites from Browser"),
+        QStringLiteral("Browser profile"),
+        labels,
+        0,
+        false,
+        &ok);
+    if (!ok || selected.isEmpty()) {
+        return;
+    }
+
+    const int selectedIndex = labels.indexOf(selected);
+    if (selectedIndex < 0 || selectedIndex >= sources.size()) {
+        return;
+    }
+
+    QString error;
+    const QStringList domains = domainsFromChromiumHistory(
+        sources.at(selectedIndex).historyPath,
+        browserImportDefaultLimit,
+        browserImportLookbackDays,
+        &error);
+    if (domains.isEmpty()) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Import Failed"),
+            error.isEmpty()
+                ? QStringLiteral("No usable domains were found in the selected browser profile for the last %1 days.").arg(browserImportLookbackDays)
+                : error);
+        return;
+    }
+
+    m_domainsEditor->setPlainText(domains.join(QLatin1Char('\n')));
+    appendLogLine(QStringLiteral("Imported %1 browser site(s) from %2, using the last %3 days.")
+        .arg(domains.size())
+        .arg(sources.at(selectedIndex).label())
+        .arg(browserImportLookbackDays));
+    QMessageBox::information(
+        this,
+        QStringLiteral("Sites Imported"),
+        QStringLiteral("Imported %1 normalized domain(s) from %2.\n\nThe Sites list will be saved with your settings.")
+            .arg(domains.size())
+            .arg(sources.at(selectedIndex).label()));
+}
+
 void MainWindow::resetTestSites()
 {
     m_domainsEditor->setPlainText(defaultDomains().join(QLatin1Char('\n')));
@@ -1932,13 +2253,22 @@ void MainWindow::showResolverDetailsForIndex(const QModelIndex& proxyIndex)
     stream << "DNSSEC AD: " << (entry.dnssecAuthenticatedDataSeen ? QStringLiteral("seen") : QStringLiteral("not seen")) << "\n\n";
 
     if (entry.stats.hasSamples()) {
-        stream << "Stats\n";
+        stream << "Cached stats\n";
         stream << "  Median: " << QString::number(entry.stats.medianMs, 'f', 1) << " ms\n";
         stream << "  P90: " << QString::number(entry.stats.p90Ms, 'f', 1) << " ms\n";
         stream << "  Mean: " << QString::number(entry.stats.meanMs, 'f', 1) << " ms\n";
         stream << "  Stddev: " << QString::number(entry.stats.stddevMs, 'f', 1) << " ms\n";
         stream << "  Min/Max: " << QString::number(entry.stats.minMs, 'f', 1) << " / " << QString::number(entry.stats.maxMs, 'f', 1) << " ms\n";
         stream << "  Loss: " << QString::number(entry.stats.lossPercent, 'f', 1) << "%\n\n";
+    }
+    if (entry.uncachedStats.totalCount > 0) {
+        stream << "Uncached stats\n";
+        stream << "  Median: " << QString::number(entry.uncachedStats.medianMs, 'f', 1) << " ms\n";
+        stream << "  P90: " << QString::number(entry.uncachedStats.p90Ms, 'f', 1) << " ms\n";
+        stream << "  Mean: " << QString::number(entry.uncachedStats.meanMs, 'f', 1) << " ms\n";
+        stream << "  Stddev: " << QString::number(entry.uncachedStats.stddevMs, 'f', 1) << " ms\n";
+        stream << "  Min/Max: " << QString::number(entry.uncachedStats.minMs, 'f', 1) << " / " << QString::number(entry.uncachedStats.maxMs, 'f', 1) << " ms\n";
+        stream << "  Loss: " << QString::number(entry.uncachedStats.lossPercent, 'f', 1) << "%\n\n";
     }
 
     int failures = 0;
@@ -2048,9 +2378,9 @@ void MainWindow::showResolverDetailsForIndex(const QModelIndex& proxyIndex)
     dialog->show();
 }
 
-void MainWindow::queueResolverFinished(const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples)
+void MainWindow::queueResolverFinished(const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples, const Statistics& uncachedStats, const QVector<ResolverSamplePoint>& uncachedSamples)
 {
-    m_pendingResolverUpdates.insert(resolverId, PendingResolverUpdate{stats, status, dnssecAuthenticatedDataSeen, samples});
+    m_pendingResolverUpdates.insert(resolverId, PendingResolverUpdate{stats, status, dnssecAuthenticatedDataSeen, samples, uncachedStats, uncachedSamples});
     if (m_requestedPasses > 1 && status == ResolverStatus::Finished) {
         QVector<ResolverSamplePoint> passSamples = samples;
         for (ResolverSamplePoint& sample : passSamples) {
@@ -2058,6 +2388,14 @@ void MainWindow::queueResolverFinished(const QString& resolverId, const Statisti
         }
         m_repeatPassSamples[resolverId].push_back(passSamples);
         m_repeatPassStats[resolverId].push_back(stats);
+        if (uncachedStats.totalCount > 0 || !uncachedSamples.isEmpty()) {
+            QVector<ResolverSamplePoint> passUncachedSamples = uncachedSamples;
+            for (ResolverSamplePoint& sample : passUncachedSamples) {
+                sample.passIndex = std::max(0, m_currentPass - 1);
+            }
+            m_repeatUncachedPassSamples[resolverId].push_back(passUncachedSamples);
+            m_repeatUncachedPassStats[resolverId].push_back(uncachedStats);
+        }
     }
     if (!m_modelFlushTimer->isActive()) {
         m_modelFlushTimer->start();
@@ -2110,7 +2448,7 @@ void MainWindow::flushPendingModelUpdates()
         }
         const PendingResolverUpdate update = it.value();
         m_pendingResolverUpdates.remove(resolverId);
-        m_model.updateStats(resolverId, update.stats, update.status, update.dnssecAuthenticatedDataSeen, update.samples, {update.samples});
+        m_model.updateStats(resolverId, update.stats, update.status, update.dnssecAuthenticatedDataSeen, update.samples, {update.samples}, update.uncachedStats, update.uncachedSamples, update.uncachedSamples.isEmpty() ? QVector<QVector<ResolverSamplePoint>>() : QVector<QVector<ResolverSamplePoint>>{update.uncachedSamples});
         ++processed;
     }
 

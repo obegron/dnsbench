@@ -30,7 +30,6 @@ constexpr int earlyNoResponseLimit = 3;
 constexpr int stopWaitMs = 6000;
 constexpr int cancellationPollMs = 25;
 constexpr int partialResultSampleBatch = 5;
-
 bool requiresWarmup(ResolverProtocol protocol)
 {
     switch (protocol) {
@@ -89,6 +88,7 @@ public:
         int interQueryDelayMs,
         QStringList domains,
         bool primeCache,
+        bool includeUncached,
         bool verboseLogging,
         bool summaryLogging,
         std::shared_ptr<std::atomic_bool> cancelled)
@@ -98,6 +98,7 @@ public:
         , m_interQueryDelayMs(std::max(0, interQueryDelayMs))
         , m_domains(std::move(domains))
         , m_primeCache(primeCache)
+        , m_includeUncached(includeUncached)
         , m_verboseLogging(verboseLogging)
         , m_summaryLogging(summaryLogging)
         , m_cancelled(std::move(cancelled))
@@ -129,6 +130,7 @@ public:
         warmResolvers(&states);
         primeResolvers(&states);
         measureResolvers(&states);
+        measureUncachedResolvers(&states);
         if (isCancelled()) {
             return;
         }
@@ -147,6 +149,8 @@ private:
         int domainOffset = 0;
         QVector<qint64> rtts;
         QVector<ResolverSamplePoint> samplePoints;
+        QVector<qint64> uncachedRtts;
+        QVector<ResolverSamplePoint> uncachedSamplePoints;
         bool dnssecAuthenticatedDataSeen = false;
         bool stoppedForNoResponse = false;
         bool sidelined = false;
@@ -160,7 +164,9 @@ private:
     int m_sampleCount = 0;
     int m_interQueryDelayMs = 50;
     QStringList m_domains;
+    QString m_uncachedRunNonce = QString::number(QRandomGenerator::global()->generate64(), 36);
     bool m_primeCache = true;
+    bool m_includeUncached = false;
     bool m_verboseLogging = false;
     bool m_summaryLogging = true;
     std::shared_ptr<std::atomic_bool> m_cancelled;
@@ -209,7 +215,7 @@ private:
                     message += QStringLiteral(" Last error: %1.").arg(firstWarmupError);
                 }
                 postSummaryLog(message);
-                postProgress(primeQueryCount() + m_sampleCount, true);
+                postProgress(primeQueryCount() + measuredQueryCount(), true);
             } else {
                 state.resolver->setTimeoutMs(fullQueryTimeoutMs);
                 postSummaryLog(QStringLiteral("Warm-up passed for %1: %2/%3 responses.")
@@ -246,7 +252,7 @@ private:
                     postSummaryLog(QStringLiteral("Sidelined %1: no responses during cache warm-up. Last error: %2.")
                         .arg(state.entry.effectiveName(), error));
                     const int skippedPrimeQueries = primeCount - sample - 1;
-                    postProgress(skippedPrimeQueries + m_sampleCount, true);
+                    postProgress(skippedPrimeQueries + measuredQueryCount(), true);
                 }
                 postProgress(1);
                 sleepBetweenQueries();
@@ -293,7 +299,7 @@ private:
                         state.stoppedForNoResponse = true;
                         state.sidelined = true;
                         postStatus(state.entry.id, ResolverStatus::Sidelined);
-                        const int samplesToMarkComplete = m_sampleCount - sample - 1;
+                        const int samplesToMarkComplete = (m_sampleCount - sample - 1) + (m_includeUncached ? m_sampleCount : 0);
                         if (samplesToMarkComplete > 0) {
                             postProgress(samplesToMarkComplete, true);
                         }
@@ -302,9 +308,49 @@ private:
                             .arg(earlyNoResponseLimit));
                     }
                 }
-
                 postProgress(1);
                 postPartialResultIfNeeded(&state);
+                sleepBetweenQueries();
+            }
+        }
+    }
+
+    void measureUncachedResolvers(std::vector<ResolverState>* states)
+    {
+        if (!m_includeUncached) {
+            return;
+        }
+
+        postSummaryLog(QStringLiteral("Starting uncached pass using random labels under the benchmark site list; cache warm-up is skipped for this pass."));
+        for (int sample = 0; sample < m_sampleCount && !isCancelled(); ++sample) {
+            for (ResolverState& state : *states) {
+                if (isCancelled()) {
+                    return;
+                }
+                if (state.sidelined) {
+                    continue;
+                }
+
+                const QString domain = uncachedDomainForSample(state, sample);
+                postVerboseLog(QStringLiteral("Uncached query %1 via %2.").arg(domain, state.entry.effectiveName()));
+
+                qint64 rttMs = 0;
+                QString error;
+                const bool success = queryBlocking(state.resolver.get(), domain, &rttMs, &error);
+                if (success) {
+                    state.uncachedRtts.push_back(rttMs);
+                    state.uncachedSamplePoints.push_back({sample, rttMs, true, {}, 1});
+                    state.dnssecAuthenticatedDataSeen = state.dnssecAuthenticatedDataSeen || state.resolver->lastAuthenticatedDataBit();
+                    postVerboseLog(QStringLiteral("Uncached response %1 via %2 in %3 ms.")
+                        .arg(domain, state.entry.effectiveName())
+                        .arg(rttMs));
+                } else {
+                    state.uncachedSamplePoints.push_back({sample, 0, false, error, 1});
+                    postVerboseLog(error.isEmpty()
+                        ? QStringLiteral("Uncached timeout/failure for %1 via %2.").arg(domain, state.entry.effectiveName())
+                        : QStringLiteral("Uncached failure for %1 via %2: %3.").arg(domain, state.entry.effectiveName(), error));
+                }
+                postProgress(1);
                 sleepBetweenQueries();
             }
         }
@@ -320,9 +366,24 @@ private:
         return m_domains.at((sampleIndex + state.domainOffset) % m_domains.size());
     }
 
+    QString uncachedDomainForSample(const ResolverState& state, int sampleIndex) const
+    {
+        const QString baseDomain = domainForSample(state, sampleIndex);
+        return QStringLiteral("dnsbench-%1-%2-%3.%4")
+            .arg(m_uncachedRunNonce)
+            .arg(QString::number(QRandomGenerator::global()->generate64(), 36))
+            .arg(sampleIndex)
+            .arg(baseDomain);
+    }
+
     int primeQueryCount() const
     {
         return m_primeCache ? std::min(m_sampleCount, static_cast<int>(m_domains.size())) : 0;
+    }
+
+    int measuredQueryCount() const
+    {
+        return m_sampleCount * (m_includeUncached ? 2 : 1);
     }
 
     bool queryBlocking(BaseResolver* resolver, const QString& domain, qint64* rttMs, QString* errorString)
@@ -434,10 +495,19 @@ private:
         const ResolverStatus status = state.stoppedForNoResponse || state.sidelined ? ResolverStatus::Sidelined : ResolverStatus::Finished;
         if (status == ResolverStatus::Finished) {
             const Statistics stats = Statistics::fromSamples(state.rtts, m_sampleCount);
-            postSummaryLog(QStringLiteral("Finished %1: median %2 ms, loss %3%.")
+            const Statistics uncachedStats = m_includeUncached
+                ? Statistics::fromSamples(state.uncachedRtts, m_sampleCount)
+                : Statistics();
+            QString message = QStringLiteral("Finished %1: cached median %2 ms, loss %3%.")
                 .arg(state.entry.effectiveName())
                 .arg(stats.medianMs, 0, 'f', 1)
-                .arg(stats.lossPercent, 0, 'f', 1));
+                .arg(stats.lossPercent, 0, 'f', 1);
+            if (m_includeUncached) {
+                message += QStringLiteral(" Uncached median %1 ms, loss %2%.")
+                    .arg(uncachedStats.medianMs, 0, 'f', 1)
+                    .arg(uncachedStats.lossPercent, 0, 'f', 1);
+            }
+            postSummaryLog(message);
         }
         postResolverUpdate(state, status, m_sampleCount);
     }
@@ -458,9 +528,12 @@ private:
     void postResolverUpdate(const ResolverState& state, ResolverStatus status, int expectedTotal)
     {
         const Statistics stats = Statistics::fromSamples(state.rtts, expectedTotal);
-        post([id = state.entry.id, stats, status, dnssec = state.dnssecAuthenticatedDataSeen, samples = state.samplePoints](BenchmarkController* controller) {
+        const Statistics uncachedStats = m_includeUncached
+            ? Statistics::fromSamples(state.uncachedRtts, state.uncachedSamplePoints.isEmpty() ? 0 : expectedTotal)
+            : Statistics();
+        post([id = state.entry.id, stats, status, dnssec = state.dnssecAuthenticatedDataSeen, samples = state.samplePoints, uncachedStats, uncachedSamples = state.uncachedSamplePoints](BenchmarkController* controller) {
             if (controller->m_running) {
-                emit controller->resolverFinished(id, stats, status, dnssec, samples);
+                emit controller->resolverFinished(id, stats, status, dnssec, samples, uncachedStats, uncachedSamples);
             }
         });
     }
@@ -498,7 +571,7 @@ BenchmarkController::~BenchmarkController()
     stop();
 }
 
-void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampleCount, int interQueryDelayMs, QStringList domains, bool primeCache)
+void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampleCount, int interQueryDelayMs, QStringList domains, bool primeCache, bool includeUncached)
 {
     stop();
 
@@ -517,7 +590,7 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
     m_completed = 0;
     m_finishedResolvers = 0;
     m_lastProgressEmitMs = 0;
-    const int measuredQueryCount = m_resolvers.size() * m_sampleCount;
+    const int measuredQueryCount = m_resolvers.size() * m_sampleCount * (includeUncached ? 2 : 1);
     const int primeQueryTotal = m_primeCache
         ? m_resolvers.size() * std::min(m_sampleCount, static_cast<int>(m_domains.size()))
         : 0;
@@ -531,6 +604,9 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
     emit logLine(QStringLiteral("Global inter-query delay: %1 ms.").arg(m_interQueryDelayMs));
     if (!m_primeCache) {
         emit logLine(QStringLiteral("Cache warm-up skipped for this pass; using cache state from earlier pass(es)."));
+    }
+    if (includeUncached) {
+        emit logLine(QStringLiteral("Uncached pass enabled: random labels under benchmark site domains will be measured after cached results."));
     }
     const bool summaryLogging = m_verboseLogging || m_resolvers.size() <= 250;
     if (!summaryLogging) {
@@ -549,6 +625,7 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
         m_interQueryDelayMs,
         m_domains,
         m_primeCache,
+        includeUncached,
         m_verboseLogging,
         summaryLogging,
         m_cancelled));

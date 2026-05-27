@@ -143,8 +143,9 @@ bool DnsPacket::isValidResponse(const QByteArray& packet, quint16 transactionId,
     const bool isResponse = (flags & 0x8000) != 0;
     const bool standardQuery = (flags & 0x7800) == 0;
     const bool notTruncated = (flags & 0x0200) == 0;
-    const bool noError = (flags & 0x000f) == 0;
-    if (id != transactionId || !isResponse || !standardQuery || !notTruncated || !noError || qdCount != 1) {
+    const quint16 responseCode = flags & 0x000f;
+    const bool completedLookup = responseCode == 0 || responseCode == 3; // NOERROR or NXDOMAIN
+    if (id != transactionId || !isResponse || !standardQuery || !notTruncated || !completedLookup || qdCount != 1) {
         return false;
     }
 
