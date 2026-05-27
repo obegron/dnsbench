@@ -82,6 +82,8 @@ QString statusToString(ResolverStatus status)
         return QStringLiteral("Failed");
     case ResolverStatus::Sidelined:
         return QStringLiteral("Sidelined");
+    case ResolverStatus::Stopped:
+        return QStringLiteral("Stopped");
     case ResolverStatus::Disabled:
         return QStringLiteral("Disabled");
     }

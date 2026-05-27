@@ -51,6 +51,7 @@ private:
     QComboBox* m_resultFilterCombo = nullptr;
     ResultsTab* m_resultsTab = nullptr;
     QPlainTextEdit* m_log = nullptr;
+    QPlainTextEdit* m_domainsEditor = nullptr;
     QTimer* m_modelFlushTimer = nullptr;
     QSet<QString> m_currentRunIds;
     QSet<QString> m_hiddenBuiltInResolverIds;
@@ -87,6 +88,7 @@ private:
     void stopBenchmark();
     void exportResults();
     void cloneResults();
+    void resetTestSites();
     void showResolverContextMenu(const QPoint& position);
     void removeSelectedResolvers();
     void openTimelineForIndex(const QModelIndex& proxyIndex);
@@ -103,5 +105,6 @@ private:
     void updateRunAction();
     void loadSettings();
     void saveSettings();
+    QStringList defaultDomains() const;
     QStringList loadDomains() const;
 };

@@ -218,6 +218,8 @@ private:
         case ResolverStatus::Sidelined:
         case ResolverStatus::Failed:
             return 3;
+        case ResolverStatus::Stopped:
+            return 4;
         case ResolverStatus::Idle:
         case ResolverStatus::Disabled:
             return 5;
@@ -1237,9 +1239,15 @@ void MainWindow::buildUi()
     monospace.setStyleHint(QFont::Monospace);
     m_log->setFont(monospace);
 
+    m_domainsEditor = new QPlainTextEdit(this);
+    m_domainsEditor->setLineWrapMode(QPlainTextEdit::NoWrap);
+    m_domainsEditor->setFont(monospace);
+    m_domainsEditor->setPlainText(defaultDomains().join(QLatin1Char('\n')));
+
     auto* tabs = new QTabWidget(this);
     tabs->addTab(m_resultsTab, QStringLiteral("Results"));
     tabs->addTab(m_log, QStringLiteral("Log"));
+    tabs->addTab(m_domainsEditor, QStringLiteral("Sites"));
 
     m_modelFlushTimer = new QTimer(this);
     m_modelFlushTimer->setInterval(100);
@@ -1277,6 +1285,10 @@ void MainWindow::buildUi()
     resultsMenu->addAction(QStringLiteral("Export"), this, &MainWindow::exportResults);
     resultsMenu->addAction(QStringLiteral("Copy Results"), this, &MainWindow::cloneResults);
     addMenuButton(toolbar, QStringLiteral("Results"), resultsMenu);
+
+    auto* sitesMenu = new QMenu(toolbar);
+    sitesMenu->addAction(QStringLiteral("Reset Test Sites"), this, &MainWindow::resetTestSites);
+    addMenuButton(toolbar, QStringLiteral("Sites"), sitesMenu);
     toolbar->addSeparator();
 
     m_ipv4Toggle = new QCheckBox(QStringLiteral("IPv4"), this);
@@ -1338,7 +1350,7 @@ void MainWindow::buildUi()
     m_delaySpin->setRange(0, 5000);
     m_delaySpin->setValue(settingsForProfile(BenchmarkProfile::WiredLan).delayMs);
     m_delaySpin->setSuffix(QStringLiteral(" ms"));
-    m_delaySpin->setToolTip(QStringLiteral("Delay between queries sent by each resolver."));
+    m_delaySpin->setToolTip(QStringLiteral("Global delay between round-robin queries."));
     m_delaySpin->setMaximumWidth(92);
     toolbar->addWidget(m_delaySpin);
 
@@ -1674,8 +1686,15 @@ void MainWindow::startBenchmarkForResolvers(const QList<ResolverEntry>& entries)
 
 void MainWindow::stopBenchmark()
 {
+    const QList<ResolverEntry> stoppedEntries = m_repeatRunEntries;
     m_currentPass = 0;
     m_repeatRunEntries.clear();
+    m_pendingStatusUpdates.clear();
+    m_pendingResolverUpdates.clear();
+    m_modelFlushTimer->stop();
+    for (const ResolverEntry& entry : stoppedEntries) {
+        m_model.updateStatus(entry.id, ResolverStatus::Stopped);
+    }
     m_controller.stop();
     updateRunAction();
 }
@@ -1737,6 +1756,12 @@ void MainWindow::cloneResults()
     layout->addLayout(controls);
     layout->addWidget(text);
     dialog->show();
+}
+
+void MainWindow::resetTestSites()
+{
+    m_domainsEditor->setPlainText(defaultDomains().join(QLatin1Char('\n')));
+    appendLogLine(QStringLiteral("Restored bundled test site list."));
 }
 
 void MainWindow::showResolverContextMenu(const QPoint& position)
@@ -2360,6 +2385,10 @@ void MainWindow::loadSettings()
     m_dohToggle->setChecked(settings.value(QStringLiteral("protocols/doh"), true).toBool());
     m_dotToggle->setChecked(settings.value(QStringLiteral("protocols/dot"), true).toBool());
     m_verboseLogToggle->setChecked(settings.value(QStringLiteral("log/verbose"), false).toBool());
+    const QString savedDomains = settings.value(QStringLiteral("benchmark/testSites")).toString();
+    if (!savedDomains.trimmed().isEmpty()) {
+        m_domainsEditor->setPlainText(savedDomains);
+    }
     const int resultFilter = settings.value(QStringLiteral("results/filter"), static_cast<int>(ResultFilter::All)).toInt();
     const int resultFilterIndex = m_resultFilterCombo->findData(resultFilter);
     m_resultFilterCombo->setCurrentIndex(resultFilterIndex >= 0 ? resultFilterIndex : 0);
@@ -2401,6 +2430,7 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("protocols/doh"), m_dohToggle->isChecked());
     settings.setValue(QStringLiteral("protocols/dot"), m_dotToggle->isChecked());
     settings.setValue(QStringLiteral("log/verbose"), m_verboseLogToggle->isChecked());
+    settings.setValue(QStringLiteral("benchmark/testSites"), m_domainsEditor->toPlainText());
     settings.setValue(QStringLiteral("results/filter"), m_resultFilterCombo->currentData().toInt());
     settings.setValue(QStringLiteral("resolvers/hiddenBuiltIns"), QStringList(m_hiddenBuiltInResolverIds.cbegin(), m_hiddenBuiltInResolverIds.cend()));
 
@@ -2422,7 +2452,7 @@ void MainWindow::saveSettings()
     settings.endArray();
 }
 
-QStringList MainWindow::loadDomains() const
+QStringList MainWindow::defaultDomains() const
 {
     QFile file(QStringLiteral(":/test_domains.txt"));
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -2435,6 +2465,27 @@ QStringList MainWindow::loadDomains() const
         if (!line.isEmpty() && !line.startsWith(QLatin1Char('#'))) {
             domains.push_back(line);
         }
+    }
+    return domains;
+}
+
+QStringList MainWindow::loadDomains() const
+{
+    QStringList domains;
+    const QStringList lines = m_domainsEditor->toPlainText().split(QLatin1Char('\n'));
+    for (QString line : lines) {
+        const int comment = line.indexOf(QLatin1Char('#'));
+        if (comment >= 0) {
+            line = line.left(comment);
+        }
+        line = line.trimmed();
+        if (!line.isEmpty()) {
+            domains.push_back(line);
+        }
+    }
+
+    if (domains.isEmpty()) {
+        return defaultDomains();
     }
     return domains;
 }

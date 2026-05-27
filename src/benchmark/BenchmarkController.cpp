@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <memory>
 #include <random>
+#include <vector>
 
 namespace {
 
@@ -24,12 +25,11 @@ constexpr int encryptedWarmupTimeoutMs = 8000;
 constexpr int warmupCount = 10;
 constexpr int warmupSuccessThreshold = 3;
 constexpr int cachePrimeNoResponseLimit = 3;
-constexpr int submitBatchSize = 32;
-constexpr int maxStartJitterMs = 100;
 constexpr int hardMaxConcurrentResolvers = 64;
 constexpr int earlyNoResponseLimit = 3;
 constexpr int stopWaitMs = 6000;
 constexpr int cancellationPollMs = 25;
+constexpr int partialResultSampleBatch = 5;
 
 bool requiresWarmup(ResolverProtocol protocol)
 {
@@ -67,38 +67,36 @@ int resolverDomainOffset(const ResolverEntry& entry, int resolverIndex, int doma
     return static_cast<int>((hash + static_cast<uint>(resolverIndex)) % static_cast<uint>(domainCount));
 }
 
-int resolverStartJitterMs(const ResolverEntry& entry, int resolverIndex, int resolverCount)
+int warmupQueryCount(const QList<ResolverEntry>& resolvers)
 {
-    if (resolverCount <= 1) {
-        return 0;
+    int count = 0;
+    for (const ResolverEntry& resolver : resolvers) {
+        if (requiresWarmup(resolver.protocol)) {
+            count += warmupCount;
+        }
     }
-    const uint hash = qHash(entry.id.isEmpty() ? entry.effectiveName() : entry.id);
-    return static_cast<int>((hash + static_cast<uint>(resolverIndex * 17)) % (maxStartJitterMs + 1));
+    return count;
 }
 
 }
 
-class ResolverBenchmarkTask final : public QRunnable {
+class BenchmarkRunnerTask final : public QRunnable {
 public:
-    ResolverBenchmarkTask(
+    BenchmarkRunnerTask(
         QPointer<BenchmarkController> controller,
-        ResolverEntry entry,
+        QList<ResolverEntry> entries,
         int sampleCount,
         int interQueryDelayMs,
         QStringList domains,
-        int domainOffset,
-        int startJitterMs,
         bool primeCache,
         bool verboseLogging,
         bool summaryLogging,
         std::shared_ptr<std::atomic_bool> cancelled)
         : m_controller(std::move(controller))
-        , m_entry(std::move(entry))
+        , m_entries(std::move(entries))
         , m_sampleCount(sampleCount)
         , m_interQueryDelayMs(std::max(0, interQueryDelayMs))
         , m_domains(std::move(domains))
-        , m_domainOffset(std::max(0, domainOffset))
-        , m_startJitterMs(std::clamp(startJitterMs, 0, maxStartJitterMs))
         , m_primeCache(primeCache)
         , m_verboseLogging(verboseLogging)
         , m_summaryLogging(summaryLogging)
@@ -111,181 +109,57 @@ public:
     {
         m_progressPostTimer.start();
         if (isCancelled()) {
-            postComplete();
             return;
         }
 
-        sleepStartJitter();
-        postStatus(ResolverStatus::Running);
-
-        auto resolver = createResolverForThread(m_entry, fullQueryTimeoutMs);
-        if (requiresWarmup(m_entry.protocol)) {
-            postSummaryLog(QStringLiteral("Warming up %1 (%2).").arg(m_entry.effectiveName(), protocolToString(m_entry.protocol)));
-
-            resolver = createResolverForThread(m_entry, encryptedWarmupTimeoutMs);
-            int successes = 0;
-            QString firstWarmupError;
-            for (int i = 0; i < warmupCount && !isCancelled(); ++i) {
-                qint64 rttMs = 0;
-                QString error;
-                if (queryBlocking(resolver.get(), domainForSample(i), &rttMs, &error)) {
-                    ++successes;
-                } else if (firstWarmupError.isEmpty()) {
-                    firstWarmupError = error;
-                }
-            }
-
-            if (isCancelled()) {
-                postComplete();
-                return;
-            }
-
-            if (successes < warmupSuccessThreshold) {
-                const Statistics stats = Statistics::fromSamples({}, m_sampleCount);
-                postStatus(ResolverStatus::Sidelined);
-                postResolverFinished(stats, ResolverStatus::Sidelined, false, {});
-                QString message = QStringLiteral("Sidelined %1: %2/%3 warm-up responses.")
-                    .arg(m_entry.effectiveName())
-                    .arg(successes)
-                    .arg(warmupCount);
-                if (!firstWarmupError.isEmpty()) {
-                    message += QStringLiteral(" Last error: %1.").arg(firstWarmupError);
-                }
-                postSummaryLog(message);
-                postProgress(m_sampleCount, true);
-                postComplete();
-                return;
-            }
-
-            postSummaryLog(QStringLiteral("Warm-up passed for %1: %2/%3 responses.")
-                .arg(m_entry.effectiveName())
-                .arg(successes)
-                .arg(warmupCount));
+        std::vector<ResolverState> states;
+        states.reserve(m_entries.size());
+        for (int i = 0; i < m_entries.size(); ++i) {
+            const ResolverEntry& entry = m_entries.at(i);
+            ResolverState state;
+            state.entry = entry;
+            state.resolver = createResolverForThread(entry, fullQueryTimeoutMs);
+            state.domainOffset = resolverDomainOffset(entry, i, m_domains.size());
+            state.samplePoints.reserve(m_sampleCount);
+            state.rtts.reserve(m_sampleCount);
+            states.push_back(std::move(state));
+            postStatus(entry.id, ResolverStatus::Running);
         }
 
-        resolver->setTimeoutMs(fullQueryTimeoutMs);
-        const int primeCount = m_primeCache ? std::min(m_sampleCount, static_cast<int>(m_domains.size())) : 0;
-        if (primeCount > 0) {
-            postSummaryLog(QStringLiteral("Priming %1 with %2 unmeasured cache warm-up query/queries.")
-                .arg(m_entry.effectiveName())
-                .arg(primeCount));
-
-            int primeSuccesses = 0;
-            int primeFailuresBeforeFirstSuccess = 0;
-            QString firstPrimeError;
-            for (int i = 0; i < primeCount && !isCancelled(); ++i) {
-                qint64 ignoredRttMs = 0;
-                QString error;
-                if (queryBlocking(resolver.get(), domainForSample(i), &ignoredRttMs, &error)) {
-                    ++primeSuccesses;
-                } else {
-                    if (firstPrimeError.isEmpty()) {
-                        firstPrimeError = error;
-                    }
-                    if (primeSuccesses == 0 && ++primeFailuresBeforeFirstSuccess >= cachePrimeNoResponseLimit) {
-                        break;
-                    }
-                }
-                if (i + 1 < primeCount) {
-                    sleepBetweenQueries();
-                }
-            }
-
-            if (isCancelled()) {
-                postComplete();
-                return;
-            }
-
-            if (primeSuccesses == 0) {
-                const Statistics stats = Statistics::fromSamples({}, m_sampleCount);
-                postStatus(ResolverStatus::Sidelined);
-                postResolverFinished(stats, ResolverStatus::Sidelined, false, {});
-                QString message = QStringLiteral("Sidelined %1: no responses during cache warm-up.")
-                    .arg(m_entry.effectiveName());
-                if (!firstPrimeError.isEmpty()) {
-                    message += QStringLiteral(" Last error: %1.").arg(firstPrimeError);
-                }
-                postSummaryLog(message);
-                postProgress(m_sampleCount, true);
-                postComplete();
-                return;
-            }
-
-            postSummaryLog(QStringLiteral("Cache warm-up complete for %1: %2/%3 responses.")
-                .arg(m_entry.effectiveName())
-                .arg(primeSuccesses)
-                .arg(primeCount));
+        warmResolvers(&states);
+        primeResolvers(&states);
+        measureResolvers(&states);
+        if (isCancelled()) {
+            return;
         }
 
-        QVector<qint64> samples;
-        samples.reserve(m_sampleCount);
-        QVector<ResolverSamplePoint> samplePoints;
-        samplePoints.reserve(m_sampleCount);
-        bool dnssecAuthenticatedDataSeen = false;
-        bool stoppedForNoResponse = false;
-        resolver->setTimeoutMs(fullQueryTimeoutMs);
-
-        for (int i = 0; i < m_sampleCount && !isCancelled(); ++i) {
-            const QString domain = domainForSample(i);
-            postVerboseLog(QStringLiteral("Query %1 via %2.").arg(domain, m_entry.effectiveName()));
-
-            qint64 rttMs = 0;
-            QString error;
-            const bool success = queryBlocking(resolver.get(), domain, &rttMs, &error);
-            if (success) {
-                samples.push_back(rttMs);
-                samplePoints.push_back({i, rttMs, true, {}});
-                dnssecAuthenticatedDataSeen = dnssecAuthenticatedDataSeen || resolver->lastAuthenticatedDataBit();
-                postVerboseLog(QStringLiteral("Response %1 via %2 in %3 ms.")
-                        .arg(domain, m_entry.effectiveName())
-                        .arg(rttMs));
-            } else {
-                samplePoints.push_back({i, 0, false, error});
-                postVerboseLog(error.isEmpty()
-                    ? QStringLiteral("Timeout/failure for %1 via %2.").arg(domain, m_entry.effectiveName())
-                    : QStringLiteral("Failure for %1 via %2: %3.").arg(domain, m_entry.effectiveName(), error));
-                if (samples.isEmpty() && samplePoints.size() >= earlyNoResponseLimit) {
-                    stoppedForNoResponse = true;
-                    const int samplesToMarkComplete = m_sampleCount - i;
-                    if (samplesToMarkComplete > 0) {
-                        postProgress(samplesToMarkComplete, true);
-                    }
-                    postSummaryLog(QStringLiteral("Sidelined %1: no responses in the first %2 full-timeout queries.")
-                        .arg(m_entry.effectiveName())
-                        .arg(earlyNoResponseLimit));
-                    break;
-                }
-            }
-            postProgress(1);
-            if (i + 1 < m_sampleCount) {
-                sleepBetweenQueries();
-            }
+        for (const ResolverState& state : states) {
+            postResolverFinished(state);
         }
         postProgress(0, true);
-
-        if (!isCancelled()) {
-            const Statistics stats = Statistics::fromSamples(samples, m_sampleCount);
-            const ResolverStatus finalStatus = stoppedForNoResponse ? ResolverStatus::Sidelined : ResolverStatus::Finished;
-            postResolverFinished(stats, finalStatus, dnssecAuthenticatedDataSeen, samplePoints);
-            if (!stoppedForNoResponse) {
-                postSummaryLog(QStringLiteral("Finished %1: median %2 ms, loss %3%.")
-                        .arg(m_entry.effectiveName())
-                        .arg(stats.medianMs, 0, 'f', 1)
-                        .arg(stats.lossPercent, 0, 'f', 1));
-            }
-        }
-
         postComplete();
     }
 
 private:
+    struct ResolverState {
+        ResolverEntry entry;
+        std::unique_ptr<BaseResolver> resolver;
+        int domainOffset = 0;
+        QVector<qint64> rtts;
+        QVector<ResolverSamplePoint> samplePoints;
+        bool dnssecAuthenticatedDataSeen = false;
+        bool stoppedForNoResponse = false;
+        bool sidelined = false;
+        int primeSuccesses = 0;
+        int primeFailuresBeforeFirstSuccess = 0;
+        int lastPostedSampleCount = 0;
+    };
+
     QPointer<BenchmarkController> m_controller;
-    ResolverEntry m_entry;
+    QList<ResolverEntry> m_entries;
     int m_sampleCount = 0;
     int m_interQueryDelayMs = 50;
     QStringList m_domains;
-    int m_domainOffset = 0;
-    int m_startJitterMs = 0;
     bool m_primeCache = true;
     bool m_verboseLogging = false;
     bool m_summaryLogging = true;
@@ -293,14 +167,162 @@ private:
     QElapsedTimer m_progressPostTimer;
     int m_pendingProgressDelta = 0;
 
+    void warmResolvers(std::vector<ResolverState>* states)
+    {
+        for (ResolverState& state : *states) {
+            if (isCancelled()) {
+                return;
+            }
+            if (!requiresWarmup(state.entry.protocol)) {
+                continue;
+            }
+
+            postSummaryLog(QStringLiteral("Warming up %1 (%2).")
+                .arg(state.entry.effectiveName(), protocolToString(state.entry.protocol)));
+            state.resolver = createResolverForThread(state.entry, encryptedWarmupTimeoutMs);
+
+            int successes = 0;
+            QString firstWarmupError;
+            for (int i = 0; i < warmupCount && !isCancelled(); ++i) {
+                qint64 rttMs = 0;
+                QString error;
+                if (queryBlocking(state.resolver.get(), domainForSample(state, i), &rttMs, &error)) {
+                    ++successes;
+                } else if (firstWarmupError.isEmpty()) {
+                    firstWarmupError = error;
+                }
+                postProgress(1);
+                sleepBetweenQueries();
+            }
+
+            if (isCancelled()) {
+                return;
+            }
+            if (successes < warmupSuccessThreshold) {
+                state.sidelined = true;
+                postStatus(state.entry.id, ResolverStatus::Sidelined);
+                QString message = QStringLiteral("Sidelined %1: %2/%3 warm-up responses.")
+                    .arg(state.entry.effectiveName())
+                    .arg(successes)
+                    .arg(warmupCount);
+                if (!firstWarmupError.isEmpty()) {
+                    message += QStringLiteral(" Last error: %1.").arg(firstWarmupError);
+                }
+                postSummaryLog(message);
+                postProgress(primeQueryCount() + m_sampleCount, true);
+            } else {
+                state.resolver->setTimeoutMs(fullQueryTimeoutMs);
+                postSummaryLog(QStringLiteral("Warm-up passed for %1: %2/%3 responses.")
+                    .arg(state.entry.effectiveName())
+                    .arg(successes)
+                    .arg(warmupCount));
+            }
+        }
+    }
+
+    void primeResolvers(std::vector<ResolverState>* states)
+    {
+        if (!m_primeCache) {
+            return;
+        }
+
+        const int primeCount = std::min(m_sampleCount, static_cast<int>(m_domains.size()));
+        for (int sample = 0; sample < primeCount && !isCancelled(); ++sample) {
+            for (ResolverState& state : *states) {
+                if (isCancelled()) {
+                    return;
+                }
+                if (state.sidelined) {
+                    continue;
+                }
+                qint64 ignoredRttMs = 0;
+                QString error;
+                const bool success = queryBlocking(state.resolver.get(), domainForSample(state, sample), &ignoredRttMs, &error);
+                if (success) {
+                    ++state.primeSuccesses;
+                } else if (state.primeSuccesses == 0 && ++state.primeFailuresBeforeFirstSuccess >= cachePrimeNoResponseLimit) {
+                    state.sidelined = true;
+                    postStatus(state.entry.id, ResolverStatus::Sidelined);
+                    postSummaryLog(QStringLiteral("Sidelined %1: no responses during cache warm-up. Last error: %2.")
+                        .arg(state.entry.effectiveName(), error));
+                    const int skippedPrimeQueries = primeCount - sample - 1;
+                    postProgress(skippedPrimeQueries + m_sampleCount, true);
+                }
+                postProgress(1);
+                sleepBetweenQueries();
+            }
+        }
+    }
+
+    void measureResolvers(std::vector<ResolverState>* states)
+    {
+        for (ResolverState& state : *states) {
+            if (!state.sidelined) {
+                state.resolver->setTimeoutMs(fullQueryTimeoutMs);
+            }
+        }
+
+        for (int sample = 0; sample < m_sampleCount && !isCancelled(); ++sample) {
+            for (ResolverState& state : *states) {
+                if (isCancelled()) {
+                    return;
+                }
+                if (state.sidelined) {
+                    continue;
+                }
+
+                const QString domain = domainForSample(state, sample);
+                postVerboseLog(QStringLiteral("Query %1 via %2.").arg(domain, state.entry.effectiveName()));
+
+                qint64 rttMs = 0;
+                QString error;
+                const bool success = queryBlocking(state.resolver.get(), domain, &rttMs, &error);
+                if (success) {
+                    state.rtts.push_back(rttMs);
+                    state.samplePoints.push_back({sample, rttMs, true, {}});
+                    state.dnssecAuthenticatedDataSeen = state.dnssecAuthenticatedDataSeen || state.resolver->lastAuthenticatedDataBit();
+                    postVerboseLog(QStringLiteral("Response %1 via %2 in %3 ms.")
+                        .arg(domain, state.entry.effectiveName())
+                        .arg(rttMs));
+                } else {
+                    state.samplePoints.push_back({sample, 0, false, error});
+                    postVerboseLog(error.isEmpty()
+                        ? QStringLiteral("Timeout/failure for %1 via %2.").arg(domain, state.entry.effectiveName())
+                        : QStringLiteral("Failure for %1 via %2: %3.").arg(domain, state.entry.effectiveName(), error));
+                    if (state.rtts.isEmpty() && state.samplePoints.size() >= earlyNoResponseLimit) {
+                        state.stoppedForNoResponse = true;
+                        state.sidelined = true;
+                        postStatus(state.entry.id, ResolverStatus::Sidelined);
+                        const int samplesToMarkComplete = m_sampleCount - sample - 1;
+                        if (samplesToMarkComplete > 0) {
+                            postProgress(samplesToMarkComplete, true);
+                        }
+                        postSummaryLog(QStringLiteral("Sidelined %1: no responses in the first %2 full-timeout queries.")
+                            .arg(state.entry.effectiveName())
+                            .arg(earlyNoResponseLimit));
+                    }
+                }
+
+                postProgress(1);
+                postPartialResultIfNeeded(&state);
+                sleepBetweenQueries();
+            }
+        }
+    }
+
     bool isCancelled() const
     {
         return !m_cancelled || m_cancelled->load(std::memory_order_relaxed);
     }
 
-    QString domainForSample(int sampleIndex) const
+    QString domainForSample(const ResolverState& state, int sampleIndex) const
     {
-        return m_domains.at((sampleIndex + m_domainOffset) % m_domains.size());
+        return m_domains.at((sampleIndex + state.domainOffset) % m_domains.size());
+    }
+
+    int primeQueryCount() const
+    {
+        return m_primeCache ? std::min(m_sampleCount, static_cast<int>(m_domains.size())) : 0;
     }
 
     bool queryBlocking(BaseResolver* resolver, const QString& domain, qint64* rttMs, QString* errorString)
@@ -357,23 +379,9 @@ private:
         }
     }
 
-    void sleepStartJitter()
+    void postStatus(const QString& id, ResolverStatus status)
     {
-        if (m_startJitterMs <= 0) {
-            return;
-        }
-
-        int remainingMs = m_startJitterMs;
-        while (remainingMs > 0 && !isCancelled()) {
-            const int sliceMs = std::min(remainingMs, 25);
-            QThread::msleep(static_cast<unsigned long>(sliceMs));
-            remainingMs -= sliceMs;
-        }
-    }
-
-    void postStatus(ResolverStatus status)
-    {
-        post([id = m_entry.id, status](BenchmarkController* controller) {
+        post([id, status](BenchmarkController* controller) {
             if (controller->m_running) {
                 emit controller->resolverStatusChanged(id, status);
             }
@@ -421,11 +429,38 @@ private:
         });
     }
 
-    void postResolverFinished(Statistics stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, QVector<ResolverSamplePoint> samples)
+    void postResolverFinished(const ResolverState& state)
     {
-        post([id = m_entry.id, stats, status, dnssecAuthenticatedDataSeen, samples = std::move(samples)](BenchmarkController* controller) {
+        const ResolverStatus status = state.stoppedForNoResponse || state.sidelined ? ResolverStatus::Sidelined : ResolverStatus::Finished;
+        if (status == ResolverStatus::Finished) {
+            const Statistics stats = Statistics::fromSamples(state.rtts, m_sampleCount);
+            postSummaryLog(QStringLiteral("Finished %1: median %2 ms, loss %3%.")
+                .arg(state.entry.effectiveName())
+                .arg(stats.medianMs, 0, 'f', 1)
+                .arg(stats.lossPercent, 0, 'f', 1));
+        }
+        postResolverUpdate(state, status, m_sampleCount);
+    }
+
+    void postPartialResultIfNeeded(ResolverState* state)
+    {
+        const int sampleCount = state->samplePoints.size();
+        if (sampleCount <= 0 || sampleCount == state->lastPostedSampleCount) {
+            return;
+        }
+        if (sampleCount == 1 || sampleCount % partialResultSampleBatch == 0 || state->sidelined) {
+            state->lastPostedSampleCount = sampleCount;
+            const int expectedTotal = state->sidelined ? m_sampleCount : sampleCount;
+            postResolverUpdate(*state, state->sidelined ? ResolverStatus::Sidelined : ResolverStatus::Running, expectedTotal);
+        }
+    }
+
+    void postResolverUpdate(const ResolverState& state, ResolverStatus status, int expectedTotal)
+    {
+        const Statistics stats = Statistics::fromSamples(state.rtts, expectedTotal);
+        post([id = state.entry.id, stats, status, dnssec = state.dnssecAuthenticatedDataSeen, samples = state.samplePoints](BenchmarkController* controller) {
             if (controller->m_running) {
-                emit controller->resolverFinished(id, stats, status, dnssecAuthenticatedDataSeen, samples);
+                emit controller->resolverFinished(id, stats, status, dnssec, samples);
             }
         });
     }
@@ -456,8 +491,6 @@ BenchmarkController::BenchmarkController(QObject* parent)
 {
     m_threadPool.setMaxThreadCount(recommendedMaxConcurrentResolvers());
     m_threadPool.setExpiryTimeout(0);
-    m_submitTimer.setSingleShot(true);
-    connect(&m_submitTimer, &QTimer::timeout, this, &BenchmarkController::submitMoreResolvers);
 }
 
 BenchmarkController::~BenchmarkController()
@@ -484,15 +517,18 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
     m_completed = 0;
     m_finishedResolvers = 0;
     m_lastProgressEmitMs = 0;
-    m_nextSubmitIndex = 0;
-    m_total = m_resolvers.size() * m_sampleCount;
+    const int measuredQueryCount = m_resolvers.size() * m_sampleCount;
+    const int primeQueryTotal = m_primeCache
+        ? m_resolvers.size() * std::min(m_sampleCount, static_cast<int>(m_domains.size()))
+        : 0;
+    m_total = measuredQueryCount + primeQueryTotal + warmupQueryCount(m_resolvers);
     m_running = true;
     m_cancelled = std::make_shared<std::atomic_bool>(false);
     m_elapsed.start();
 
     emit progressUpdated(0, m_total, 0);
-    emit logLine(QStringLiteral("Running up to %1 resolver(s) in parallel.").arg(m_threadPool.maxThreadCount()));
-    emit logLine(QStringLiteral("Inter-query delay: %1 ms.").arg(m_interQueryDelayMs));
+    emit logLine(QStringLiteral("Round-robin scheduler: one query at a time across %1 resolver(s).").arg(m_resolvers.size()));
+    emit logLine(QStringLiteral("Global inter-query delay: %1 ms.").arg(m_interQueryDelayMs));
     if (!m_primeCache) {
         emit logLine(QStringLiteral("Cache warm-up skipped for this pass; using cache state from earlier pass(es)."));
     }
@@ -506,7 +542,16 @@ void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampl
         return;
     }
 
-    submitMoreResolvers();
+    m_threadPool.start(new BenchmarkRunnerTask(
+        QPointer<BenchmarkController>(this),
+        m_resolvers,
+        m_sampleCount,
+        m_interQueryDelayMs,
+        m_domains,
+        m_primeCache,
+        m_verboseLogging,
+        summaryLogging,
+        m_cancelled));
 }
 
 void BenchmarkController::stop()
@@ -519,7 +564,6 @@ void BenchmarkController::stop()
     if (m_cancelled) {
         m_cancelled->store(true, std::memory_order_relaxed);
     }
-    m_submitTimer.stop();
     m_threadPool.clear();
     m_threadPool.waitForDone(stopWaitMs);
     emit logLine(QStringLiteral("Benchmark stopped."));
@@ -567,39 +611,8 @@ void BenchmarkController::handleTaskComplete()
     }
 
     ++m_finishedResolvers;
-    if (m_finishedResolvers >= m_resolvers.size()) {
+    if (m_finishedResolvers >= 1) {
         finishAll();
-    }
-}
-
-void BenchmarkController::submitMoreResolvers()
-{
-    if (!m_running) {
-        return;
-    }
-
-    const bool summaryLogging = m_verboseLogging || m_resolvers.size() <= 250;
-    const int endIndex = std::min(m_nextSubmitIndex + submitBatchSize, static_cast<int>(m_resolvers.size()));
-    for (; m_nextSubmitIndex < endIndex; ++m_nextSubmitIndex) {
-        const ResolverEntry& entry = m_resolvers.at(m_nextSubmitIndex);
-        const int domainOffset = resolverDomainOffset(entry, m_nextSubmitIndex, m_domains.size());
-        const int startJitterMs = resolverStartJitterMs(entry, m_nextSubmitIndex, m_resolvers.size());
-        m_threadPool.start(new ResolverBenchmarkTask(
-            QPointer<BenchmarkController>(this),
-            entry,
-            m_sampleCount,
-            m_interQueryDelayMs,
-            m_domains,
-            domainOffset,
-            startJitterMs,
-            m_primeCache,
-            m_verboseLogging,
-            summaryLogging,
-            m_cancelled));
-    }
-
-    if (m_nextSubmitIndex < m_resolvers.size()) {
-        m_submitTimer.start(0);
     }
 }
 
@@ -613,7 +626,6 @@ void BenchmarkController::finishAll()
     if (m_cancelled) {
         m_cancelled->store(true, std::memory_order_relaxed);
     }
-    m_submitTimer.stop();
     m_threadPool.waitForDone(stopWaitMs);
     emit progressUpdated(m_completed, m_total, m_elapsed.elapsed());
     emit logLine(QStringLiteral("Benchmark complete."));

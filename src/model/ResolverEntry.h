@@ -19,6 +19,7 @@ enum class ResolverStatus {
     Finished,
     Failed,
     Sidelined,
+    Stopped,
     Disabled
 };
 
