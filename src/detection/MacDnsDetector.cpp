@@ -16,13 +16,13 @@ QList<ResolverEntry> MacDnsDetector::detect()
     const QString output = QString::fromUtf8(scutil.readAllStandardOutput());
     const QStringList lines = output.split(QLatin1Char('\n'));
     
-    QSet<QString> addresses;
+    QStringList addresses;
     QRegularExpression re(QStringLiteral("nameserver\\[\\d+\\]\\s*:\\s*(\\S+)"));
 
     for (const QString& line : lines) {
         QRegularExpressionMatch match = re.match(line);
         if (match.hasMatch()) {
-            addresses.insert(match.captured(1));
+            addresses.push_back(match.captured(1));
         }
     }
 

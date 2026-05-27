@@ -262,7 +262,7 @@ int runHeadlessBenchmark(QCoreApplication& app)
     }
 
     QObject::connect(&controller, &BenchmarkController::resolverFinished, &app,
-        [&](const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples) {
+        [&](const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples, const Statistics& uncachedStats, const QVector<ResolverSamplePoint>& uncachedSamples) {
             const int row = rowById.value(resolverId, -1);
             if (row < 0) {
                 return;
@@ -271,6 +271,8 @@ int runHeadlessBenchmark(QCoreApplication& app)
             results[row].status = status;
             results[row].dnssecAuthenticatedDataSeen = dnssecAuthenticatedDataSeen;
             results[row].samples = samples;
+            results[row].uncachedStats = uncachedStats;
+            results[row].uncachedSamples = uncachedSamples;
         });
 
     if (parser.isSet(QStringLiteral("verbose"))) {
