@@ -49,6 +49,8 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     qt6-qtbase-devel \
     qt6-qttools-devel \
     mingw-nsis-base \
+    mingw32-nsis \
+    mingw64-nsis \
     && dnf clean all
 
 WORKDIR /src
