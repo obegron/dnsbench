@@ -55,6 +55,7 @@ mkdir -p "$DEST_DIR/sqldrivers"
 cp "$MINGW_PLUGINS/sqldrivers/qsqlite.dll" "$DEST_DIR/sqldrivers/"
 
 # Image formats plugins
+mkdir -p "$DEST_DIR/imageformats"
 cp "$MINGW_PLUGINS/imageformats/qico.dll" "$DEST_DIR/imageformats/"
 cp "$MINGW_PLUGINS/imageformats/qgif.dll" "$DEST_DIR/imageformats/"
 cp "$MINGW_PLUGINS/imageformats/qjpeg.dll" "$DEST_DIR/imageformats/"
