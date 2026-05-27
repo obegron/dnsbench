@@ -48,6 +48,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     ninja-build \
     qt6-qtbase-devel \
     qt6-qttools-devel \
+    mingw-nsis-base \
     && dnf clean all
 
 WORKDIR /src
@@ -62,62 +63,19 @@ RUN cmake -S . -B /build/windows -G Ninja \
     -DCMAKE_BUILD_TYPE=Release
 RUN cmake --build /build/windows
 
+# Collect dependencies and build installer
+RUN mkdir -p /build/windows/dist && \
+    chmod +x /src/packaging/windows/collect_deps.sh && \
+    /src/packaging/windows/collect_deps.sh \
+        /build/windows/dnsbench.exe \
+        /usr/x86_64-w64-mingw32/sys-root/mingw/bin \
+        /usr/x86_64-w64-mingw32/sys-root/mingw/lib/qt6/plugins \
+        /build/windows/dist && \
+    cp /src/packaging/windows/dnsbench.nsi /build/windows/ && \
+    cd /build/windows && makensis dnsbench.nsi
+
 FROM scratch AS windows-artifacts
 
-ARG MINGW_BIN=/usr/x86_64-w64-mingw32/sys-root/mingw/bin
-ARG MINGW_PLUGINS=/usr/x86_64-w64-mingw32/sys-root/mingw/lib/qt6/plugins
+COPY --from=windows-build /build/windows/dnsbench-setup.exe /dnsbench-setup.exe
+COPY --from=windows-build /build/windows/dist /dist
 
-COPY --from=windows-build ${MINGW_BIN}/libgcc_s_seh-1.dll /libgcc_s_seh-1.dll
-COPY --from=windows-build ${MINGW_BIN}/libstdc++-6.dll /libstdc++-6.dll
-COPY --from=windows-build ${MINGW_BIN}/libwinpthread-1.dll /libwinpthread-1.dll
-COPY --from=windows-build ${MINGW_BIN}/Qt6Charts.dll /Qt6Charts.dll
-COPY --from=windows-build ${MINGW_BIN}/Qt6Core.dll /Qt6Core.dll
-COPY --from=windows-build ${MINGW_BIN}/Qt6Gui.dll /Qt6Gui.dll
-COPY --from=windows-build ${MINGW_BIN}/Qt6Network.dll /Qt6Network.dll
-COPY --from=windows-build ${MINGW_BIN}/Qt6Sql.dll /Qt6Sql.dll
-COPY --from=windows-build ${MINGW_BIN}/Qt6Widgets.dll /Qt6Widgets.dll
-COPY --from=windows-build ${MINGW_BIN}/Qt6OpenGL.dll /Qt6OpenGL.dll
-COPY --from=windows-build ${MINGW_BIN}/Qt6OpenGLWidgets.dll /Qt6OpenGLWidgets.dll
-COPY --from=windows-build ${MINGW_BIN}/libpcre2-8-0.dll /libpcre2-8-0.dll
-COPY --from=windows-build ${MINGW_BIN}/libpcre2-32-0.dll /libpcre2-32-0.dll
-COPY --from=windows-build ${MINGW_BIN}/libpcre2-posix-3.dll /libpcre2-posix-3.dll
-COPY --from=windows-build ${MINGW_BIN}/libharfbuzz-cairo-0.dll /libharfbuzz-cairo-0.dll
-COPY --from=windows-build ${MINGW_BIN}/libharfbuzz-gobject-0.dll /libharfbuzz-gobject-0.dll
-COPY --from=windows-build ${MINGW_BIN}/libharfbuzz-icu-0.dll /libharfbuzz-icu-0.dll
-COPY --from=windows-build ${MINGW_BIN}/libharfbuzz-subset-0.dll /libharfbuzz-subset-0.dll
-COPY --from=windows-build ${MINGW_BIN}/icuio76.dll /icuio76.dll
-COPY --from=windows-build ${MINGW_BIN}/icutest76.dll /icutest76.dll
-COPY --from=windows-build ${MINGW_BIN}/icutu76.dll /icutu76.dll
-COPY --from=windows-build ${MINGW_BIN}/zlib1.dll /zlib1.dll
-COPY --from=windows-build ${MINGW_BIN}/libpcre2-16-0.dll /libpcre2-16-0.dll
-COPY --from=windows-build ${MINGW_BIN}/libcrypto-3-x64.dll /libcrypto-3-x64.dll
-COPY --from=windows-build ${MINGW_BIN}/libssl-3-x64.dll /libssl-3-x64.dll
-COPY --from=windows-build ${MINGW_BIN}/libsqlite3-0.dll /libsqlite3-0.dll
-COPY --from=windows-build ${MINGW_BIN}/libharfbuzz-0.dll /libharfbuzz-0.dll
-COPY --from=windows-build ${MINGW_BIN}/libpng16-16.dll /libpng16-16.dll
-COPY --from=windows-build ${MINGW_BIN}/libjpeg-62.dll /libjpeg-62.dll
-COPY --from=windows-build ${MINGW_BIN}/libfreetype-6.dll /libfreetype-6.dll
-COPY --from=windows-build ${MINGW_BIN}/libglib-2.0-0.dll /libglib-2.0-0.dll
-COPY --from=windows-build ${MINGW_BIN}/libintl-8.dll /libintl-8.dll
-COPY --from=windows-build ${MINGW_BIN}/iconv.dll /iconv.dll
-COPY --from=windows-build ${MINGW_BIN}/libfontconfig-1.dll /libfontconfig-1.dll
-COPY --from=windows-build ${MINGW_BIN}/libexpat-1.dll /libexpat-1.dll
-COPY --from=windows-build ${MINGW_BIN}/libbz2-1.dll /libbz2-1.dll
-COPY --from=windows-build ${MINGW_BIN}/icudata76.dll /icudata76.dll
-COPY --from=windows-build ${MINGW_BIN}/icui18n76.dll /icui18n76.dll
-COPY --from=windows-build ${MINGW_BIN}/icuuc76.dll /icuuc76.dll
-COPY --from=windows-build ${MINGW_PLUGINS}/platforms/qwindows.dll /platforms/qwindows.dll
-COPY --from=windows-build ${MINGW_PLUGINS}/tls/qopensslbackend.dll /tls/qopensslbackend.dll
-COPY --from=windows-build ${MINGW_PLUGINS}/tls/qschannelbackend.dll /tls/qschannelbackend.dll
-COPY --from=windows-build ${MINGW_PLUGINS}/tls/qcertonlybackend.dll /tls/qcertonlybackend.dll
-COPY --from=windows-build ${MINGW_PLUGINS}/networkinformation/qnetworklistmanager.dll /networkinformation/qnetworklistmanager.dll
-COPY --from=windows-build ${MINGW_PLUGINS}/sqldrivers/qsqlite.dll /sqldrivers/qsqlite.dll
-COPY --from=windows-build ${MINGW_PLUGINS}/imageformats/qico.dll /imageformats/qico.dll
-COPY --from=windows-build ${MINGW_PLUGINS}/imageformats/qgif.dll /imageformats/qgif.dll
-COPY --from=windows-build ${MINGW_PLUGINS}/imageformats/qjpeg.dll /imageformats/qjpeg.dll
-
-
-COPY --from=windows-build /build/windows/dnsbench.exe /dnsbench.exe
-COPY --from=windows-build /build/windows/test_statistics.exe /test_statistics.exe
-COPY --from=windows-build /build/windows/test_dns_packet.exe /test_dns_packet.exe
-COPY --from=windows-build /build/windows/test_udp_benchmark.exe /test_udp_benchmark.exe

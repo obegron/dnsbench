@@ -154,7 +154,14 @@ jobs:
 
           # Windows
           if [ -d "dist/artifacts/dnsbench-windows-amd64" ]; then
-            (cd dist/artifacts/dnsbench-windows-amd64 && zip -r "../../release/dnsbench-windows-amd64.zip" .)
+            # The portable zip
+            if [ -d "dist/artifacts/dnsbench-windows-amd64/dist" ]; then
+              (cd dist/artifacts/dnsbench-windows-amd64/dist && zip -r "../../../release/dnsbench-windows-amd64.zip" .)
+            fi
+            # The installer
+            if [ -f "dist/artifacts/dnsbench-windows-amd64/dnsbench-setup.exe" ]; then
+              cp "dist/artifacts/dnsbench-windows-amd64/dnsbench-setup.exe" dist/release/
+            fi
           fi
 
           # macOS (already zipped in the job to preserve metadata/permissions)
@@ -166,7 +173,8 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           gh release create "$TAG_NAME" \
-            dist/release/*.zip \
+            dist/release/* \
             --title "$TAG_NAME" \
             --notes "Unsigned DNSBench release artifacts."
+
 
