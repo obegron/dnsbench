@@ -5,9 +5,12 @@
 
 #include <QElapsedTimer>
 #include <QNetworkAccessManager>
+#include <QPointer>
 #include <QUrl>
 
 #include <memory>
+
+class QNetworkReply;
 
 class DohResolver : public BaseResolver {
     Q_OBJECT
@@ -20,6 +23,7 @@ public:
     void setTimeoutMs(int timeoutMs) override;
     QString lastErrorString() const override;
     bool lastAuthenticatedDataBit() const override;
+    void cancel() override;
 
 private:
     ResolverEntry m_entry;
@@ -27,6 +31,7 @@ private:
     QString m_lastError;
     bool m_lastAuthenticatedDataBit = false;
     QNetworkAccessManager m_network;
+    QPointer<QNetworkReply> m_reply;
 
     QUrl endpoint() const;
     void queryWithRetry(const QString& domain, QueryCallback callback, bool retryHttp2ProtocolError, std::shared_ptr<QElapsedTimer> elapsed);

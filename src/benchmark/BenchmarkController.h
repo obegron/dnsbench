@@ -19,6 +19,7 @@ class BenchmarkController : public QObject {
 
 public:
     explicit BenchmarkController(QObject* parent = nullptr);
+    ~BenchmarkController() override;
 
     void start(const QList<ResolverEntry>& resolvers, int sampleCount, int interQueryDelayMs, QStringList domains, bool primeCache = true);
     void stop();

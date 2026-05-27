@@ -17,6 +17,13 @@
 
 #include <algorithm>
 
+#if defined(Q_OS_WIN)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace {
 
 QStringList readDomainLines(QFile& file)
@@ -281,5 +288,9 @@ int runHeadlessBenchmark(QCoreApplication& app)
     out << (parser.isSet(QStringLiteral("csv"))
             ? ResultExporter::toCsv(results)
             : ResultExporter::toTextTable(results));
+    out.flush();
+#if defined(Q_OS_WIN)
+    TerminateProcess(GetCurrentProcess(), 0);
+#endif
     return 0;
 }

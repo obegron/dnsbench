@@ -75,6 +75,14 @@ bool DohResolver::lastAuthenticatedDataBit() const
     return m_lastAuthenticatedDataBit;
 }
 
+void DohResolver::cancel()
+{
+    m_lastError = QStringLiteral("cancelled");
+    if (m_reply) {
+        m_reply->abort();
+    }
+}
+
 QUrl DohResolver::endpoint() const
 {
     QUrl url(m_entry.address);
@@ -119,6 +127,7 @@ void DohResolver::queryWithRetry(
     request.setTransferTimeout(m_timeoutMs);
 
     QNetworkReply* reply = m_network.post(request, queryPacket);
+    m_reply = reply;
 
     QObject::connect(reply, &QNetworkReply::sslErrors, reply, [this](const QList<QSslError>& errors) {
         QStringList messages;
@@ -133,7 +142,9 @@ void DohResolver::queryWithRetry(
         const QByteArray payload = reply->readAll();
         const QVariant statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
         bool success = false;
-        if (reply->error() != QNetworkReply::NoError) {
+        if (m_lastError == QLatin1String("cancelled")) {
+            success = false;
+        } else if (reply->error() != QNetworkReply::NoError) {
             if (retryHttp2ProtocolError && reply->errorString().contains(QStringLiteral("HTTP/2 protocol error"), Qt::CaseInsensitive)) {
                 m_network.clearConnectionCache();
                 reply->deleteLater();
@@ -153,6 +164,9 @@ void DohResolver::queryWithRetry(
             success = true;
         }
         const qint64 rtt = success ? elapsed->elapsed() : 0;
+        if (m_reply == reply) {
+            m_reply = nullptr;
+        }
         reply->deleteLater();
         callback(rtt, success);
     });

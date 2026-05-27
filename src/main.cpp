@@ -7,6 +7,13 @@
 #include <QIcon>
 #include <QStyleFactory>
 
+#if defined(Q_OS_WIN)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace {
 
 bool headlessRequested(int argc, char* argv[])
@@ -90,7 +97,14 @@ int main(int argc, char* argv[])
     configureWidgetStyle(app);
     app.setWindowIcon(QIcon(QStringLiteral(":/dnsbench.svg")));
 
-    MainWindow window;
-    window.show();
-    return app.exec();
+    auto* window = new MainWindow;
+    window->show();
+    const int exitCode = app.exec();
+    window->prepareForExit();
+#if defined(Q_OS_WIN)
+    TerminateProcess(GetCurrentProcess(), static_cast<UINT>(exitCode));
+#else
+    delete window;
+    return exitCode;
+#endif
 }

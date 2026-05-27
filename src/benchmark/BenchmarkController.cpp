@@ -28,6 +28,8 @@ constexpr int submitBatchSize = 32;
 constexpr int maxStartJitterMs = 100;
 constexpr int hardMaxConcurrentResolvers = 64;
 constexpr int earlyNoResponseLimit = 3;
+constexpr int stopWaitMs = 6000;
+constexpr int cancellationPollMs = 25;
 
 bool requiresWarmup(ResolverProtocol protocol)
 {
@@ -308,9 +310,20 @@ private:
         }
 
         QEventLoop loop;
+        QTimer cancellationTimer;
         bool done = false;
         bool success = false;
         qint64 rtt = 0;
+
+        cancellationTimer.setInterval(cancellationPollMs);
+        QObject::connect(&cancellationTimer, &QTimer::timeout, &loop, [&]() {
+            if (!done && isCancelled()) {
+                done = true;
+                success = false;
+                resolver->cancel();
+                loop.quit();
+            }
+        });
 
         resolver->query(domain, [&](qint64 measuredRttMs, bool measuredSuccess) {
             rtt = measuredRttMs;
@@ -320,8 +333,10 @@ private:
         });
 
         if (!done) {
+            cancellationTimer.start();
             loop.exec();
         }
+        cancellationTimer.stop();
 
         if (rttMs) {
             *rttMs = rtt;
@@ -440,9 +455,14 @@ BenchmarkController::BenchmarkController(QObject* parent)
     : QObject(parent)
 {
     m_threadPool.setMaxThreadCount(recommendedMaxConcurrentResolvers());
-    m_threadPool.setExpiryTimeout(-1);
+    m_threadPool.setExpiryTimeout(0);
     m_submitTimer.setSingleShot(true);
     connect(&m_submitTimer, &QTimer::timeout, this, &BenchmarkController::submitMoreResolvers);
+}
+
+BenchmarkController::~BenchmarkController()
+{
+    stop();
 }
 
 void BenchmarkController::start(const QList<ResolverEntry>& resolvers, int sampleCount, int interQueryDelayMs, QStringList domains, bool primeCache)
@@ -501,6 +521,7 @@ void BenchmarkController::stop()
     }
     m_submitTimer.stop();
     m_threadPool.clear();
+    m_threadPool.waitForDone(stopWaitMs);
     emit logLine(QStringLiteral("Benchmark stopped."));
     emit benchmarkFinished();
 }
@@ -593,6 +614,7 @@ void BenchmarkController::finishAll()
         m_cancelled->store(true, std::memory_order_relaxed);
     }
     m_submitTimer.stop();
+    m_threadPool.waitForDone(stopWaitMs);
     emit progressUpdated(m_completed, m_total, m_elapsed.elapsed());
     emit logLine(QStringLiteral("Benchmark complete."));
     emit benchmarkFinished();

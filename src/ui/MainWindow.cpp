@@ -1101,6 +1101,20 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    prepareForExit();
+}
+
+void MainWindow::prepareForExit()
+{
+    if (m_preparedForExit) {
+        return;
+    }
+    m_preparedForExit = true;
+
+    if (m_controller.isRunning()) {
+        disconnect(&m_controller, nullptr, this, nullptr);
+        m_controller.stop();
+    }
     saveSettings();
 }
 

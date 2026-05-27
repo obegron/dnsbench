@@ -26,6 +26,7 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
+    void prepareForExit();
 
 protected:
     void changeEvent(QEvent* event) override;
@@ -66,6 +67,7 @@ private:
     QHash<QString, QVector<QVector<ResolverSamplePoint>>> m_repeatPassSamples;
     int m_requestedPasses = 1;
     int m_currentPass = 0;
+    bool m_preparedForExit = false;
 
     void buildUi();
     void connectController();
