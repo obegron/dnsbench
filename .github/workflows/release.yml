@@ -38,6 +38,7 @@ jobs:
           cmake -S . -B build-macos -G Ninja \
             "-DCMAKE_PREFIX_PATH=$(brew --prefix qt);$(brew --prefix openssl@3)" \
             -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13 \
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
@@ -49,7 +50,7 @@ jobs:
       - name: Package
         run: |
           "$(brew --prefix qt)/bin/macdeployqt" build-macos/dnsbench.app -always-overwrite
-          /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion 12.0" build-macos/dnsbench.app/Contents/Info.plist || true
+          /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion 13.0" build-macos/dnsbench.app/Contents/Info.plist || true
           codesign --force --deep --sign - build-macos/dnsbench.app
           ditto -c -k --keepParent build-macos/dnsbench.app "dnsbench-macos-${{ matrix.arch }}.zip"
 
