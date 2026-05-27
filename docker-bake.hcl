@@ -14,6 +14,13 @@ target "linux" {
   output = ["type=docker"]
 }
 
+target "linux-artifacts" {
+  context = "."
+  dockerfile = "Dockerfile"
+  target = "linux-artifacts"
+  output = ["type=local,dest=dist/linux"]
+}
+
 target "windows" {
   context = "."
   dockerfile = "Dockerfile"

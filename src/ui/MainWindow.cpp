@@ -349,9 +349,14 @@ public:
         if (m_resultFilter == filter) {
             return;
         }
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
         beginFilterChange();
         m_resultFilter = filter;
         endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
+        m_resultFilter = filter;
+        invalidateFilter();
+#endif
     }
 
 protected:

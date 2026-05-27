@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     cmake \
     libqt6charts6-dev \
+    libqt6sql6-sqlite \
     libssl-dev \
     ninja-build \
     nlohmann-json3-dev \
@@ -30,6 +31,10 @@ ENV QT_QPA_PLATFORM=offscreen
 
 RUN ctest --test-dir /build --output-on-failure
 
+FROM scratch AS linux-artifacts
+
+COPY --from=linux-build /build/dnsbench /dnsbench
+
 FROM fedora:42 AS windows-build
 
 RUN dnf install -y --setopt=install_weak_deps=False \
@@ -39,6 +44,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     mingw64-openssl \
     mingw64-qt6-qtbase \
     mingw64-qt6-qtcharts \
+    mingw64-sqlite \
     ninja-build \
     qt6-qtbase-devel \
     qt6-qttools-devel \
@@ -68,6 +74,7 @@ COPY --from=windows-build ${MINGW_BIN}/Qt6Charts.dll /Qt6Charts.dll
 COPY --from=windows-build ${MINGW_BIN}/Qt6Core.dll /Qt6Core.dll
 COPY --from=windows-build ${MINGW_BIN}/Qt6Gui.dll /Qt6Gui.dll
 COPY --from=windows-build ${MINGW_BIN}/Qt6Network.dll /Qt6Network.dll
+COPY --from=windows-build ${MINGW_BIN}/Qt6Sql.dll /Qt6Sql.dll
 COPY --from=windows-build ${MINGW_BIN}/Qt6Widgets.dll /Qt6Widgets.dll
 COPY --from=windows-build ${MINGW_BIN}/Qt6OpenGL.dll /Qt6OpenGL.dll
 COPY --from=windows-build ${MINGW_BIN}/Qt6OpenGLWidgets.dll /Qt6OpenGLWidgets.dll
@@ -85,6 +92,7 @@ COPY --from=windows-build ${MINGW_BIN}/zlib1.dll /zlib1.dll
 COPY --from=windows-build ${MINGW_BIN}/libpcre2-16-0.dll /libpcre2-16-0.dll
 COPY --from=windows-build ${MINGW_BIN}/libcrypto-3-x64.dll /libcrypto-3-x64.dll
 COPY --from=windows-build ${MINGW_BIN}/libssl-3-x64.dll /libssl-3-x64.dll
+COPY --from=windows-build ${MINGW_BIN}/libsqlite3-0.dll /libsqlite3-0.dll
 COPY --from=windows-build ${MINGW_BIN}/libharfbuzz-0.dll /libharfbuzz-0.dll
 COPY --from=windows-build ${MINGW_BIN}/libpng16-16.dll /libpng16-16.dll
 COPY --from=windows-build ${MINGW_BIN}/libjpeg-62.dll /libjpeg-62.dll
@@ -103,6 +111,7 @@ COPY --from=windows-build ${MINGW_PLUGINS}/tls/qopensslbackend.dll /tls/qopenssl
 COPY --from=windows-build ${MINGW_PLUGINS}/tls/qschannelbackend.dll /tls/qschannelbackend.dll
 COPY --from=windows-build ${MINGW_PLUGINS}/tls/qcertonlybackend.dll /tls/qcertonlybackend.dll
 COPY --from=windows-build ${MINGW_PLUGINS}/networkinformation/qnetworklistmanager.dll /networkinformation/qnetworklistmanager.dll
+COPY --from=windows-build ${MINGW_PLUGINS}/sqldrivers/qsqlite.dll /sqldrivers/qsqlite.dll
 COPY --from=windows-build ${MINGW_PLUGINS}/imageformats/qico.dll /imageformats/qico.dll
 COPY --from=windows-build ${MINGW_PLUGINS}/imageformats/qgif.dll /imageformats/qgif.dll
 COPY --from=windows-build ${MINGW_PLUGINS}/imageformats/qjpeg.dll /imageformats/qjpeg.dll

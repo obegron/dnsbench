@@ -1,0 +1,200 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos-slice:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-13
+          - arch: arm64
+            runner: macos-14
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install cmake ninja qt openssl@3 nlohmann-json
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-macos -G Ninja \
+            "-DCMAKE_PREFIX_PATH=$(brew --prefix qt);$(brew --prefix openssl@3)" \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build-macos
+
+      - name: Test
+        run: ctest --test-dir build-macos --output-on-failure
+
+      - name: Package
+        run: |
+          "$(brew --prefix qt)/bin/macdeployqt" build-macos/dnsbench.app -always-overwrite
+          file build-macos/dnsbench.app/Contents/MacOS/dnsbench
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dnsbench-macos-${{ matrix.arch }}
+          path: build-macos/dnsbench.app
+
+  macos-universal:
+    name: macOS universal
+    needs: macos-slice
+    runs-on: macos-14
+
+    steps:
+      - name: Download app slices
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/macos-slices
+
+      - name: Merge slices
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp -R dist/macos-slices/dnsbench-macos-arm64/dnsbench.app dist/dnsbench.app
+
+          while IFS= read -r -d '' arm_file; do
+            rel="${arm_file#dist/dnsbench.app/}"
+            x64_file="dist/macos-slices/dnsbench-macos-x86_64/dnsbench.app/$rel"
+            if [[ ! -f "$x64_file" ]]; then
+              continue
+            fi
+            if ! file "$arm_file" | grep -q 'Mach-O'; then
+              continue
+            fi
+            if ! file "$x64_file" | grep -q 'Mach-O'; then
+              continue
+            fi
+            lipo -create "$x64_file" "$arm_file" -output "$arm_file.universal"
+            mv "$arm_file.universal" "$arm_file"
+          done < <(find dist/dnsbench.app -type f -print0)
+
+          /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion 12.0" dist/dnsbench.app/Contents/Info.plist || true
+          codesign --force --deep --sign - dist/dnsbench.app
+          file dist/dnsbench.app/Contents/MacOS/dnsbench
+          ditto -c -k --keepParent dist/dnsbench.app dist/dnsbench-macos-universal.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dnsbench-macos-universal
+          path: dist/dnsbench-macos-universal.zip
+
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: arm64
+            platform: linux/arm64
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        run: |
+          rm -rf "dist/linux-${{ matrix.arch }}"
+          docker buildx build \
+            --platform "${{ matrix.platform }}" \
+            --target linux-artifacts \
+            --output "type=local,dest=dist/linux-${{ matrix.arch }}" \
+            .
+
+      - name: Package
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip
+          mkdir -p dist/packages
+          chmod +x "dist/linux-${{ matrix.arch }}/dnsbench"
+          (cd "dist/linux-${{ matrix.arch }}" && zip -r "../packages/dnsbench-linux-${{ matrix.arch }}.zip" .)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dnsbench-linux-${{ matrix.arch }}
+          path: dist/packages/dnsbench-linux-${{ matrix.arch }}.zip
+
+  windows:
+    name: Windows amd64
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        run: |
+          rm -rf dist/windows
+          docker buildx build \
+            --platform linux/amd64 \
+            --target windows-artifacts \
+            --output type=local,dest=dist/windows \
+            .
+
+      - name: Package
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip
+          mkdir -p dist/packages
+          (cd dist/windows && zip -r ../packages/dnsbench-windows-amd64.zip .)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dnsbench-windows-amd64
+          path: dist/packages/dnsbench-windows-amd64.zip
+
+  publish:
+    name: Publish GitHub release
+    needs: [macos-universal, linux, windows]
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/artifacts
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          mapfile -t files < <(find dist/artifacts -name '*.zip' -type f | sort)
+          gh release create "$TAG_NAME" \
+            "${files[@]}" \
+            --title "$TAG_NAME" \
+            --notes "Unsigned DNSBench release artifacts."
