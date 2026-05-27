@@ -173,7 +173,7 @@ The GitHub release workflow runs for tags matching `v*` and can also be started 
 
 Release artifacts:
 
-- `dnsbench-macos-arm64.zip`: macOS `.app` bundle for Apple Silicon, packaged with `macdeployqt`.
+- `dnsbench-macos-universal.zip`: macOS `.app` bundle built as native Intel and Apple Silicon slices, merged with `lipo`, and packaged with `macdeployqt`.
 - `dnsbench-linux-amd64.zip`: Linux amd64 build artifact.
 - `dnsbench-linux-arm64.zip`: Linux arm64 build artifact.
 - `dnsbench-windows-amd64.zip`: Windows amd64 executable with Qt/OpenSSL runtime DLLs and plugins.
