@@ -2051,14 +2051,12 @@ void MainWindow::showResolverDetailsForIndex(const QModelIndex& proxyIndex)
 void MainWindow::queueResolverFinished(const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples)
 {
     m_pendingResolverUpdates.insert(resolverId, PendingResolverUpdate{stats, status, dnssecAuthenticatedDataSeen, samples});
-    if (m_requestedPasses > 1) {
+    if (m_requestedPasses > 1 && status == ResolverStatus::Finished) {
         QVector<ResolverSamplePoint> passSamples = samples;
         for (ResolverSamplePoint& sample : passSamples) {
             sample.passIndex = std::max(0, m_currentPass - 1);
         }
         m_repeatPassSamples[resolverId].push_back(passSamples);
-    }
-    if (m_requestedPasses > 1 && status == ResolverStatus::Finished && stats.hasSamples()) {
         m_repeatPassStats[resolverId].push_back(stats);
     }
     if (!m_modelFlushTimer->isActive()) {
@@ -2114,6 +2112,10 @@ void MainWindow::flushPendingModelUpdates()
         m_pendingResolverUpdates.remove(resolverId);
         m_model.updateStats(resolverId, update.stats, update.status, update.dnssecAuthenticatedDataSeen, update.samples, {update.samples});
         ++processed;
+    }
+
+    if (processed > 0) {
+        m_proxy->sort(m_table->horizontalHeader()->sortIndicatorSection(), m_table->horizontalHeader()->sortIndicatorOrder());
     }
 
     if (m_pendingStatusUpdates.isEmpty() && m_pendingResolverUpdates.isEmpty()) {
