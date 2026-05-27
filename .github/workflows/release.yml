@@ -154,11 +154,14 @@ jobs:
 
           # Windows
           if [ -d "dist/artifacts/dnsbench-windows-amd64" ]; then
-            # The portable zip
+            # The portable zip: rename 'dist' to 'dnsbench' inside the zip
             if [ -d "dist/artifacts/dnsbench-windows-amd64/dist" ]; then
-              (cd dist/artifacts/dnsbench-windows-amd64/dist && zip -r "../../../release/dnsbench-windows-amd64.zip" .)
+              mkdir -p dist/release/dnsbench
+              cp -r dist/artifacts/dnsbench-windows-amd64/dist/* dist/release/dnsbench/
+              (cd dist/release && zip -r "dnsbench-windows-amd64.zip" dnsbench)
+              rm -rf dist/release/dnsbench
             fi
-            # The installer
+            # The installer: publish as loose EXE
             if [ -f "dist/artifacts/dnsbench-windows-amd64/dnsbench-setup.exe" ]; then
               cp "dist/artifacts/dnsbench-windows-amd64/dnsbench-setup.exe" dist/release/
             fi
