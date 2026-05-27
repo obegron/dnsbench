@@ -54,10 +54,14 @@ cp "$MINGW_PLUGINS/networkinformation/qnetworklistmanager.dll" "$DEST_DIR/networ
 mkdir -p "$DEST_DIR/sqldrivers"
 cp "$MINGW_PLUGINS/sqldrivers/qsqlite.dll" "$DEST_DIR/sqldrivers/"
 
-mkdir -p "$DEST_DIR/imageformats"
+# Image formats plugins
 cp "$MINGW_PLUGINS/imageformats/qico.dll" "$DEST_DIR/imageformats/"
 cp "$MINGW_PLUGINS/imageformats/qgif.dll" "$DEST_DIR/imageformats/"
 cp "$MINGW_PLUGINS/imageformats/qjpeg.dll" "$DEST_DIR/imageformats/"
+
+# Explicitly copy OpenSSL DLLs (Qt loads them dynamically)
+cp "$MINGW_BIN/libssl-3-x64.dll" "$DEST_DIR/" || echo "Warning: libssl-3-x64.dll not found"
+cp "$MINGW_BIN/libcrypto-3-x64.dll" "$DEST_DIR/" || echo "Warning: libcrypto-3-x64.dll not found"
 
 # Also check dependencies of plugins
 for plugin in $(find "$DEST_DIR" -name "*.dll"); do
