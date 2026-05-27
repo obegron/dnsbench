@@ -84,28 +84,26 @@ enum class BenchmarkProfile {
 
 struct BenchmarkProfileSettings {
     int delayMs = 100;
-    int concurrency = 1;
 };
 
 BenchmarkProfileSettings settingsForProfile(BenchmarkProfile profile)
 {
-    const int recommendedConcurrency = BenchmarkController::recommendedMaxConcurrentResolvers();
     switch (profile) {
     case BenchmarkProfile::Conservative:
-        return {200, 1};
+        return {200};
     case BenchmarkProfile::HomeWifi:
-        return {150, std::min(recommendedConcurrency, 2)};
+        return {150};
     case BenchmarkProfile::WiredLan:
-        return {100, std::min(recommendedConcurrency, 4)};
+        return {100};
     case BenchmarkProfile::FastNetwork:
-        return {50, 8};
+        return {50};
     case BenchmarkProfile::Custom:
         break;
     }
-    return {100, recommendedConcurrency};
+    return {100};
 }
 
-BenchmarkProfile profileForSettings(int delayMs, int concurrency)
+BenchmarkProfile profileForSettings(int delayMs)
 {
     for (BenchmarkProfile profile : {
              BenchmarkProfile::Conservative,
@@ -113,7 +111,7 @@ BenchmarkProfile profileForSettings(int delayMs, int concurrency)
              BenchmarkProfile::WiredLan,
              BenchmarkProfile::FastNetwork}) {
         const BenchmarkProfileSettings candidate = settingsForProfile(profile);
-        if (candidate.delayMs == delayMs && candidate.concurrency == concurrency) {
+        if (candidate.delayMs == delayMs) {
             return profile;
         }
     }
@@ -1316,7 +1314,7 @@ void MainWindow::buildUi()
     m_benchmarkProfileCombo->addItem(QStringLiteral("Wired / LAN"), static_cast<int>(BenchmarkProfile::WiredLan));
     m_benchmarkProfileCombo->addItem(QStringLiteral("Fast"), static_cast<int>(BenchmarkProfile::FastNetwork));
     m_benchmarkProfileCombo->addItem(QStringLiteral("Custom"), static_cast<int>(BenchmarkProfile::Custom));
-    m_benchmarkProfileCombo->setToolTip(QStringLiteral("Chooses default delay and resolver concurrency for the network environment."));
+    m_benchmarkProfileCombo->setToolTip(QStringLiteral("Chooses the default delay between queries for the network environment."));
     m_benchmarkProfileCombo->setMaximumWidth(130);
     toolbar->addWidget(m_benchmarkProfileCombo);
 
@@ -1330,24 +1328,12 @@ void MainWindow::buildUi()
     m_delaySpin->setMaximumWidth(92);
     toolbar->addWidget(m_delaySpin);
 
-    toolbar->addSeparator();
-    toolbar->addWidget(new QLabel(QStringLiteral("Concurrent"), this));
-    m_concurrencySpin = new QSpinBox(this);
-    m_concurrencySpin->setRange(1, 64);
-    m_concurrencySpin->setValue(settingsForProfile(BenchmarkProfile::WiredLan).concurrency);
-    m_concurrencySpin->setToolTip(QStringLiteral("Maximum number of resolvers benchmarked at the same time. Higher values finish large lists faster but create more worker threads and can add network or resolver rate-limit noise."));
-    m_concurrencySpin->setMaximumWidth(58);
-    toolbar->addWidget(m_concurrencySpin);
-
     const int wiredProfileIndex = m_benchmarkProfileCombo->findData(static_cast<int>(BenchmarkProfile::WiredLan));
     m_benchmarkProfileCombo->setCurrentIndex(wiredProfileIndex >= 0 ? wiredProfileIndex : 0);
     connect(m_benchmarkProfileCombo, &QComboBox::currentIndexChanged, this, [this]() {
         applyBenchmarkProfile(m_benchmarkProfileCombo->currentData().toInt());
     });
     connect(m_delaySpin, &QSpinBox::valueChanged, this, [this]() {
-        markBenchmarkProfileCustom();
-    });
-    connect(m_concurrencySpin, &QSpinBox::valueChanged, this, [this]() {
         markBenchmarkProfileCustom();
     });
 
@@ -1458,7 +1444,7 @@ void MainWindow::startBenchmarkPass(bool resetRuntimeState)
         : QString();
     appendLogLine(QStringLiteral("Starting benchmark%1.").arg(passText));
     m_controller.setVerboseLogging(m_verboseLogToggle->isChecked());
-    m_controller.setMaxConcurrentResolvers(m_concurrencySpin->value());
+    m_controller.setMaxConcurrentResolvers(BenchmarkController::recommendedMaxConcurrentResolvers());
     const bool primeCache = m_requestedPasses <= 1 || m_currentPass <= 1;
     m_controller.start(m_repeatRunEntries, m_sampleSpin->value(), m_delaySpin->value(), loadDomains(), primeCache);
     updateRunAction();
@@ -2302,9 +2288,7 @@ void MainWindow::applyBenchmarkProfile(int profileId)
 
     const BenchmarkProfileSettings profileSettings = settingsForProfile(profile);
     const QSignalBlocker delayBlocker(m_delaySpin);
-    const QSignalBlocker concurrencyBlocker(m_concurrencySpin);
     m_delaySpin->setValue(profileSettings.delayMs);
-    m_concurrencySpin->setValue(profileSettings.concurrency);
 }
 
 void MainWindow::markBenchmarkProfileCustom()
@@ -2332,9 +2316,6 @@ void MainWindow::loadSettings()
         if (settings.value(QStringLiteral("benchmark/interQueryDelayMs"), 50).toInt() == 50) {
             settings.setValue(QStringLiteral("benchmark/interQueryDelayMs"), wiredSettings.delayMs);
         }
-        if (settings.value(QStringLiteral("benchmark/maxConcurrentResolvers"), 8).toInt() == 8) {
-            settings.setValue(QStringLiteral("benchmark/maxConcurrentResolvers"), wiredSettings.concurrency);
-        }
         settings.setValue(QStringLiteral("benchmark/defaultsV2Applied"), true);
     }
     if (!settings.value(QStringLiteral("benchmark/wiredLanDefaultApplied"), false).toBool()) {
@@ -2342,15 +2323,13 @@ void MainWindow::loadSettings()
         if (currentProfile == static_cast<int>(BenchmarkProfile::HomeWifi)) {
             settings.setValue(QStringLiteral("benchmark/profile"), static_cast<int>(BenchmarkProfile::WiredLan));
             settings.setValue(QStringLiteral("benchmark/interQueryDelayMs"), wiredSettings.delayMs);
-            settings.setValue(QStringLiteral("benchmark/maxConcurrentResolvers"), wiredSettings.concurrency);
         }
         settings.setValue(QStringLiteral("benchmark/wiredLanDefaultApplied"), true);
     }
     const int savedDelayMs = settings.value(QStringLiteral("benchmark/interQueryDelayMs"), wiredSettings.delayMs).toInt();
-    const int savedConcurrency = settings.value(QStringLiteral("benchmark/maxConcurrentResolvers"), wiredSettings.concurrency).toInt();
     const int profileId = settings.contains(QStringLiteral("benchmark/profile"))
         ? settings.value(QStringLiteral("benchmark/profile")).toInt()
-        : static_cast<int>(profileForSettings(savedDelayMs, savedConcurrency));
+        : static_cast<int>(profileForSettings(savedDelayMs));
 
     restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
     m_sampleSpin->setValue(settings.value(QStringLiteral("benchmark/sampleCount"), 250).toInt());
@@ -2359,7 +2338,6 @@ void MainWindow::loadSettings()
     m_benchmarkProfileCombo->setCurrentIndex(profileIndex >= 0 ? profileIndex : m_benchmarkProfileCombo->findData(static_cast<int>(BenchmarkProfile::WiredLan)));
     if (static_cast<BenchmarkProfile>(m_benchmarkProfileCombo->currentData().toInt()) == BenchmarkProfile::Custom) {
         m_delaySpin->setValue(savedDelayMs);
-        m_concurrencySpin->setValue(savedConcurrency);
     } else {
         applyBenchmarkProfile(m_benchmarkProfileCombo->currentData().toInt());
     }
@@ -2404,7 +2382,6 @@ void MainWindow::saveSettings()
     settings.setValue(QStringLiteral("benchmark/passes"), m_passSpin->value());
     settings.setValue(QStringLiteral("benchmark/profile"), m_benchmarkProfileCombo->currentData().toInt());
     settings.setValue(QStringLiteral("benchmark/interQueryDelayMs"), m_delaySpin->value());
-    settings.setValue(QStringLiteral("benchmark/maxConcurrentResolvers"), m_concurrencySpin->value());
     settings.setValue(QStringLiteral("protocols/ipv4"), m_ipv4Toggle->isChecked());
     settings.setValue(QStringLiteral("protocols/ipv6"), m_ipv6Toggle->isChecked());
     settings.setValue(QStringLiteral("protocols/doh"), m_dohToggle->isChecked());

@@ -47,9 +47,8 @@ To try the same compile in a container, use the Fedora-based cross-build target:
 docker buildx bake windows
 ```
 
-The Windows compile path supports manual resolvers in the GUI and headless
-mode. `--system-dns` currently prints a platform support message unless a
-Windows system DNS detector is added later.
+The Windows compile path supports manual resolvers and detected system DNS
+resolvers in both the GUI and headless mode.
 
 ### macOS Compile
 

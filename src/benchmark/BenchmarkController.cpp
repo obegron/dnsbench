@@ -522,11 +522,7 @@ void BenchmarkController::setVerboseLogging(bool verboseLogging)
 
 int BenchmarkController::recommendedMaxConcurrentResolvers()
 {
-    const int threads = std::max(1, QThread::idealThreadCount());
-    if (threads <= 2) {
-        return 1;
-    }
-    return std::clamp((threads + 3) / 4, 2, 4);
+    return 1;
 }
 
 void BenchmarkController::handleTaskProgress(int completedDelta)

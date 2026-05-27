@@ -65,6 +65,10 @@ if(APPLE)
     list(APPEND DNSBENCH_APP_SOURCES src/detection/MacDnsDetector.cpp)
 endif()
 
+if(WIN32)
+    list(APPEND DNSBENCH_APP_SOURCES src/detection/WindowsDnsDetector.cpp)
+endif()
+
 qt_add_executable(dnsbench ${DNSBENCH_APP_SOURCES})
 target_include_directories(dnsbench PRIVATE src)
 target_link_libraries(dnsbench
@@ -77,6 +81,10 @@ target_link_libraries(dnsbench
         OpenSSL::SSL
         OpenSSL::Crypto
 )
+
+if(WIN32)
+    target_link_libraries(dnsbench PRIVATE iphlpapi)
+endif()
 
 if(APPLE)
     set_target_properties(dnsbench PROPERTIES

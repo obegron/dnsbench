@@ -39,7 +39,6 @@ private:
     QSpinBox* m_sampleSpin = nullptr;
     QSpinBox* m_passSpin = nullptr;
     QSpinBox* m_delaySpin = nullptr;
-    QSpinBox* m_concurrencySpin = nullptr;
     QProgressBar* m_progress = nullptr;
     QLabel* m_etaLabel = nullptr;
     QCheckBox* m_ipv4Toggle = nullptr;
