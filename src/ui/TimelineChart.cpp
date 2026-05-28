@@ -29,13 +29,20 @@ QChart* createTimelineChart(const ResolverEntry& entry, bool large, bool overlay
         ? QVector<QVector<ResolverSamplePoint>>{entry.samples}
         : entry.passSamples;
     QStringList passNames;
+    const auto appendPassNames = [&passNames](const QString& prefix, int count) {
+        for (int pass = 0; pass < count; ++pass) {
+            passNames.push_back(count > 1
+                    ? QStringLiteral("%1 pass %2").arg(prefix).arg(pass + 1)
+                    : prefix);
+        }
+    };
+    appendPassNames(QStringLiteral("Cached"), passes.size());
     if (!entry.uncachedSamples.isEmpty()) {
         if (entry.uncachedPassSamples.isEmpty()) {
-            if (entry.passSamples.isEmpty()) {
-                passNames = {QStringLiteral("Cached"), QStringLiteral("Uncached")};
-            }
             passes.push_back(entry.uncachedSamples);
+            passNames.push_back(QStringLiteral("Uncached"));
         } else {
+            appendPassNames(QStringLiteral("Uncached"), entry.uncachedPassSamples.size());
             for (const QVector<ResolverSamplePoint>& samples : entry.uncachedPassSamples) {
                 passes.push_back(samples);
             }
