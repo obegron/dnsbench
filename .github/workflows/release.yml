@@ -38,6 +38,7 @@ jobs:
         with:
           version: '6.8.0'
           cache: true
+          modules: 'qtcharts'
 
       - name: Configure
         run: |
