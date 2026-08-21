@@ -2,6 +2,8 @@
 
 Qt6 desktop tool for benchmarking DNS resolvers across UDP IPv4/IPv6, DNS-over-HTTPS, and DNS-over-TLS.
 
+![DNS Benchmark desktop interface with resolver protocol filters, latency columns, and benchmark controls](docs/dnsbench.png)
+
 ## Features
 
 - Resolver table with protocol filters, pinned resolvers, progress, ETA, logs, and result summaries.
