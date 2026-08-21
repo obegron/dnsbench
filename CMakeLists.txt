@@ -163,5 +163,6 @@ add_test(NAME test_doh_resolver COMMAND test_doh_resolver)
 
 qt_add_executable(test_headless_cli tests/test_headless_cli.cpp)
 target_link_libraries(test_headless_cli PRIVATE Qt6::Core Qt6::Test)
+target_compile_definitions(test_headless_cli PRIVATE DNSBENCH_EXECUTABLE="$<TARGET_FILE:dnsbench>")
 add_dependencies(test_headless_cli dnsbench)
 add_test(NAME test_headless_cli COMMAND test_headless_cli)

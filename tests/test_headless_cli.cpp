@@ -16,11 +16,7 @@ private:
     static ProcessResult run(const QStringList& arguments)
     {
         QProcess process;
-        QString program = QCoreApplication::applicationDirPath() + QStringLiteral("/dnsbench");
-#if defined(Q_OS_WIN)
-        program += QStringLiteral(".exe");
-#endif
-        process.setProgram(program);
+        process.setProgram(QString::fromUtf8(DNSBENCH_EXECUTABLE));
         process.setArguments(arguments);
         process.start();
         if (!process.waitForFinished(10000)) {
