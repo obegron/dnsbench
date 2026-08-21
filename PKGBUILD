@@ -1,6 +1,6 @@
 # Maintainer: local
 pkgname=dnsbench
-pkgver=0.1.0
+pkgver=0.1.5
 pkgrel=1
 pkgdesc='Qt6 desktop tool for benchmarking DNS resolvers'
 arch=('x86_64')

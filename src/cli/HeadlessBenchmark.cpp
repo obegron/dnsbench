@@ -17,13 +17,6 @@
 
 #include <algorithm>
 
-#if defined(Q_OS_WIN)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#endif
-
 namespace {
 
 QStringList readDomainLines(QFile& file)
@@ -200,11 +193,10 @@ int runHeadlessBenchmark(QCoreApplication& app)
         QStringLiteral("resolver")});
     parser.addOption({QStringLiteral("system-dns"), QStringLiteral("Benchmark detected system DNS resolvers.")});
     parser.addOption({QStringLiteral("samples"), QStringLiteral("Measured samples per resolver."), QStringLiteral("count"), QStringLiteral("250")});
-    parser.addOption({QStringLiteral("delay"), QStringLiteral("Delay between queries per resolver in milliseconds."), QStringLiteral("ms"), QStringLiteral("100")});
-    parser.addOption({QStringLiteral("concurrent"), QStringLiteral("Maximum resolvers benchmarked at once."), QStringLiteral("count"),
-        QString::number(BenchmarkController::recommendedMaxConcurrentResolvers())});
+    parser.addOption({QStringLiteral("delay"), QStringLiteral("Global delay between scheduled queries in milliseconds."), QStringLiteral("ms"), QStringLiteral("100")});
     parser.addOption({QStringLiteral("domain-limit"), QStringLiteral("Limit test domains loaded from resources; 0 means all."), QStringLiteral("count"), QStringLiteral("0")});
     parser.addOption({QStringLiteral("domains-file"), QStringLiteral("Load benchmark domains from a text file instead of the built-in list."), QStringLiteral("path")});
+    parser.addOption({QStringLiteral("uncached"), QStringLiteral("Also measure unique uncached names after the cached pass.")});
     parser.addOption({QStringLiteral("csv"), QStringLiteral("Print CSV instead of a Markdown table.")});
     parser.addOption({QStringLiteral("verbose"), QStringLiteral("Print per-query benchmark log lines to stderr.")});
     parser.process(app);
@@ -218,11 +210,6 @@ int runHeadlessBenchmark(QCoreApplication& app)
     const int delayMs = parser.value(QStringLiteral("delay")).toInt(&ok);
     if (!ok || delayMs < 0) {
         err << "--delay must be a non-negative integer\n";
-        return 2;
-    }
-    const int concurrent = parser.value(QStringLiteral("concurrent")).toInt(&ok);
-    if (!ok || concurrent < 1) {
-        err << "--concurrent must be a positive integer\n";
         return 2;
     }
     const int domainLimit = parser.value(QStringLiteral("domain-limit")).toInt(&ok);
@@ -253,7 +240,6 @@ int runHeadlessBenchmark(QCoreApplication& app)
 
     QList<ResolverEntry> results = entries;
     BenchmarkController controller;
-    controller.setMaxConcurrentResolvers(concurrent);
     controller.setVerboseLogging(parser.isSet(QStringLiteral("verbose")));
 
     QHash<QString, int> rowById;
@@ -284,15 +270,16 @@ int runHeadlessBenchmark(QCoreApplication& app)
     QEventLoop loop;
     QObject::connect(&controller, &BenchmarkController::benchmarkFinished, &loop, &QEventLoop::quit);
 
-    controller.start(entries, samples, delayMs, domains);
+    controller.start(entries, samples, delayMs, domains, true, parser.isSet(QStringLiteral("uncached")));
     loop.exec();
 
     out << (parser.isSet(QStringLiteral("csv"))
             ? ResultExporter::toCsv(results)
             : ResultExporter::toTextTable(results));
     out.flush();
-#if defined(Q_OS_WIN)
-    TerminateProcess(GetCurrentProcess(), 0);
-#endif
-    return 0;
+    const bool hasResult = std::any_of(results.cbegin(), results.cend(), [](const ResolverEntry& entry) {
+        return entry.status == ResolverStatus::Finished && entry.stats.hasSamples();
+    });
+    const int exitCode = hasResult ? 0 : 1;
+    return exitCode;
 }

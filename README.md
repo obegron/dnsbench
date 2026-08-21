@@ -38,6 +38,21 @@ Run the app:
 ./build/dnsbench
 ```
 
+## Headless Usage
+
+Use `--headless` for terminal output and automation. Resolver specifications use `address[,protocol[,port[,name]]]` and may be repeated:
+
+```sh
+./build/dnsbench --headless \
+  --resolver 1.1.1.1,IPv4,53,Cloudflare \
+  --resolver https://cloudflare-dns.com/dns-query,DoH,443,Cloudflare-DoH \
+  --samples 25 --delay 50 --domain-limit 20
+```
+
+Add `--uncached` to measure unique random names after the cached pass, `--csv` for machine-readable output, or `--system-dns` to include detected system resolvers. Queries are intentionally scheduled one at a time across resolvers to avoid benchmark traffic affecting competing measurements.
+
+Exit statuses are `0` when at least one resolver produced a measured result, `1` when the benchmark completed without any measured result, and `2` for invalid command-line input.
+
 ## Test Sites
 
 The `Sites` menu controls the domains used for cached and uncached benchmark queries.
@@ -67,7 +82,7 @@ CSV and TSV can use a header row:
 name,address,protocol,port,pinned,enabled
 Cloudflare,1.1.1.1,IPv4,53,false,true
 Quad9 DoT,9.9.9.9,DoT,853,false,true
-Google DoH,https://dns.google/dns-query,DoH,53,false,true
+Google DoH,https://dns.google/dns-query,DoH,443,false,true
 ```
 
 The importer also accepts exports from this app, including Markdown tables copied from `Copy Results`.
@@ -175,9 +190,11 @@ Release artifacts:
 
 - `dnsbench-macos-x86_64.zip`: macOS Intel `.app` bundle packaged with `macdeployqt`.
 - `dnsbench-macos-arm64.zip`: macOS Apple Silicon `.app` bundle packaged with `macdeployqt`.
-- `dnsbench-linux-amd64.zip`: Linux amd64 binary.
-- `dnsbench-linux-arm64.zip`: Linux arm64 binary.
+- `dnsbench-linux-amd64.zip`: Linux amd64 launcher, executable, Qt plugins, and non-system runtime libraries.
+- `dnsbench-linux-arm64.zip`: Linux arm64 launcher, executable, Qt plugins, and non-system runtime libraries.
 - `dnsbench-windows-amd64.zip`: Portable Windows amd64 version containing the executable and required Qt/OpenSSL DLLs.
 - `dnsbench-setup.exe`: Windows per-user installer.
 
 The macOS artifacts are ad-hoc signed only, not Developer ID signed or notarized. Users may need to allow them through Gatekeeper manually.
+
+The Linux archives still require a glibc-compatible distribution, but bundle Qt, OpenSSL, and the other non-system shared libraries used by the application. Run the included `dnsbench` launcher rather than `dnsbench-bin` directly.

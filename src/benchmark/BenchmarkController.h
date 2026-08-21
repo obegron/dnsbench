@@ -23,9 +23,7 @@ public:
     void start(const QList<ResolverEntry>& resolvers, int sampleCount, int interQueryDelayMs, QStringList domains, bool primeCache = true, bool includeUncached = false);
     void stop();
     bool isRunning() const;
-    void setMaxConcurrentResolvers(int maxConcurrentResolvers);
     void setVerboseLogging(bool verboseLogging);
-    static int recommendedMaxConcurrentResolvers();
 
 signals:
     void progressUpdated(int completed, int total, qint64 elapsedMs);

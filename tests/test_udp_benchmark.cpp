@@ -238,8 +238,6 @@ private slots:
         QVERIFY2(server.bind(), qPrintable(server.errorString()));
 
         BenchmarkController controller;
-        controller.setMaxConcurrentResolvers(1);
-
         QEventLoop loop;
         bool benchmarkFinished = false;
         bool resolverFinished = false;

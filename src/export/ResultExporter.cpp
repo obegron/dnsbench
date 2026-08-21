@@ -25,8 +25,11 @@ QString markdownEscape(QString value)
     return value;
 }
 
-QString formatStat(double value)
+QString formatStat(const Statistics& stats, double value, bool requiresSuccessfulSample = true)
 {
+    if (stats.totalCount == 0 || (requiresSuccessfulSample && stats.successCount == 0)) {
+        return QStringLiteral("-");
+    }
     return QString::number(value, 'f', 1);
 }
 
@@ -152,20 +155,20 @@ QString ResultExporter::toCsv(const QList<ResolverEntry>& entries)
                << csvEscape(entry.effectiveName()) << ','
                << csvEscape(entry.address) << ','
                << protocolToString(entry.protocol) << ','
-               << formatStat(entry.stats.medianMs) << ','
-               << formatStat(entry.stats.p90Ms) << ','
-               << formatStat(entry.stats.meanMs) << ','
-               << formatStat(entry.stats.stddevMs) << ','
-               << formatStat(entry.stats.minMs) << ','
-               << formatStat(entry.stats.maxMs) << ','
-               << formatStat(entry.stats.lossPercent) << ','
-               << formatStat(entry.uncachedStats.medianMs) << ','
-               << formatStat(entry.uncachedStats.p90Ms) << ','
-               << formatStat(entry.uncachedStats.meanMs) << ','
-               << formatStat(entry.uncachedStats.stddevMs) << ','
-               << formatStat(entry.uncachedStats.minMs) << ','
-               << formatStat(entry.uncachedStats.maxMs) << ','
-               << formatStat(entry.uncachedStats.lossPercent) << ','
+               << formatStat(entry.stats, entry.stats.medianMs) << ','
+               << formatStat(entry.stats, entry.stats.p90Ms) << ','
+               << formatStat(entry.stats, entry.stats.meanMs) << ','
+               << formatStat(entry.stats, entry.stats.stddevMs) << ','
+               << formatStat(entry.stats, entry.stats.minMs) << ','
+               << formatStat(entry.stats, entry.stats.maxMs) << ','
+               << formatStat(entry.stats, entry.stats.lossPercent, false) << ','
+               << formatStat(entry.uncachedStats, entry.uncachedStats.medianMs) << ','
+               << formatStat(entry.uncachedStats, entry.uncachedStats.p90Ms) << ','
+               << formatStat(entry.uncachedStats, entry.uncachedStats.meanMs) << ','
+               << formatStat(entry.uncachedStats, entry.uncachedStats.stddevMs) << ','
+               << formatStat(entry.uncachedStats, entry.uncachedStats.minMs) << ','
+               << formatStat(entry.uncachedStats, entry.uncachedStats.maxMs) << ','
+               << formatStat(entry.uncachedStats, entry.uncachedStats.lossPercent, false) << ','
                << csvEscape(dnssecFor(entry)) << ','
                << statusToString(entry.status) << ','
                << csvEscape(verdictFor(entry, rank)) << '\n';
@@ -188,12 +191,12 @@ QString ResultExporter::toTextTable(const QList<ResolverEntry>& entries)
                << markdownEscape(entry.effectiveName()) << " | "
                << markdownEscape(entry.address) << " | "
                << protocolToString(entry.protocol) << " | "
-               << formatStat(entry.stats.medianMs) << " | "
-               << formatStat(entry.stats.p90Ms) << " | "
-               << formatStat(entry.stats.lossPercent) << "% | "
-               << formatStat(entry.uncachedStats.medianMs) << " | "
-               << formatStat(entry.uncachedStats.p90Ms) << " | "
-               << formatStat(entry.uncachedStats.lossPercent) << "% | "
+               << formatStat(entry.stats, entry.stats.medianMs) << " | "
+               << formatStat(entry.stats, entry.stats.p90Ms) << " | "
+               << formatStat(entry.stats, entry.stats.lossPercent, false) << (entry.stats.totalCount > 0 ? "% | " : " | ")
+               << formatStat(entry.uncachedStats, entry.uncachedStats.medianMs) << " | "
+               << formatStat(entry.uncachedStats, entry.uncachedStats.p90Ms) << " | "
+               << formatStat(entry.uncachedStats, entry.uncachedStats.lossPercent, false) << (entry.uncachedStats.totalCount > 0 ? "% | " : " | ")
                << markdownEscape(dnssecFor(entry)) << " | "
                << statusToString(entry.status) << " | "
                << markdownEscape(verdictFor(entry, rank)) << " |\n";

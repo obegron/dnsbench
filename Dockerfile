@@ -31,9 +31,15 @@ ENV QT_QPA_PLATFORM=offscreen
 
 RUN ctest --test-dir /build --output-on-failure
 
+RUN chmod +x /src/packaging/linux/collect_deps.sh /src/packaging/linux/dnsbench.sh && \
+    /src/packaging/linux/collect_deps.sh \
+        /build/dnsbench \
+        "/usr/lib/$(gcc -dumpmachine)/qt6/plugins" \
+        /build/linux-bundle
+
 FROM scratch AS linux-artifacts
 
-COPY --from=linux-build /build/dnsbench /dnsbench
+COPY --from=linux-build /build/linux-bundle /dnsbench
 
 FROM fedora:42 AS windows-build
 
@@ -80,4 +86,3 @@ FROM scratch AS windows-artifacts
 
 COPY --from=windows-build /build/windows/dnsbench-setup.exe /dnsbench-setup.exe
 COPY --from=windows-build /build/windows/dist /dist
-

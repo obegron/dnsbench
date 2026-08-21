@@ -93,8 +93,8 @@ bool AddResolverDialog::validate()
         }
     } else if (protocol == ResolverProtocol::DoH) {
         const QUrl url(address.contains(QStringLiteral("://")) ? address : QStringLiteral("https://%1/dns-query").arg(address));
-        if (!url.isValid() || url.host().isEmpty()) {
-            QMessageBox::warning(this, QStringLiteral("Invalid Resolver"), QStringLiteral("Enter a valid DoH URL or host."));
+        if (!url.isValid() || url.scheme() != QLatin1String("https") || url.host().isEmpty()) {
+            QMessageBox::warning(this, QStringLiteral("Invalid Resolver"), QStringLiteral("Enter a valid HTTPS DoH URL or host."));
             return false;
         }
     }

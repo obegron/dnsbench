@@ -25,7 +25,6 @@ constexpr int encryptedWarmupTimeoutMs = 8000;
 constexpr int warmupCount = 10;
 constexpr int warmupSuccessThreshold = 3;
 constexpr int cachePrimeNoResponseLimit = 3;
-constexpr int hardMaxConcurrentResolvers = 64;
 constexpr int earlyNoResponseLimit = 3;
 constexpr int stopWaitMs = 6000;
 constexpr int cancellationPollMs = 25;
@@ -562,7 +561,7 @@ private:
 BenchmarkController::BenchmarkController(QObject* parent)
     : QObject(parent)
 {
-    m_threadPool.setMaxThreadCount(recommendedMaxConcurrentResolvers());
+    m_threadPool.setMaxThreadCount(1);
     m_threadPool.setExpiryTimeout(0);
 }
 
@@ -652,19 +651,9 @@ bool BenchmarkController::isRunning() const
     return m_running;
 }
 
-void BenchmarkController::setMaxConcurrentResolvers(int maxConcurrentResolvers)
-{
-    m_threadPool.setMaxThreadCount(std::clamp(maxConcurrentResolvers, 1, hardMaxConcurrentResolvers));
-}
-
 void BenchmarkController::setVerboseLogging(bool verboseLogging)
 {
     m_verboseLogging = verboseLogging;
-}
-
-int BenchmarkController::recommendedMaxConcurrentResolvers()
-{
-    return 1;
 }
 
 void BenchmarkController::handleTaskProgress(int completedDelta)

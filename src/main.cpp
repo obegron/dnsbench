@@ -59,7 +59,7 @@ void configureApplication()
 {
     QCoreApplication::setOrganizationName(QStringLiteral("dnsbench"));
     QCoreApplication::setApplicationName(QStringLiteral("DNS Benchmark"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.1.4"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(DNSBENCH_VERSION));
 
     qRegisterMetaType<Statistics>("Statistics");
     qRegisterMetaType<ResolverStatus>("ResolverStatus");

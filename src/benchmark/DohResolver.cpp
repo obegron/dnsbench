@@ -89,6 +89,12 @@ QUrl DohResolver::endpoint() const
     if (url.scheme().isEmpty()) {
         url = QUrl(QStringLiteral("https://%1/dns-query").arg(m_entry.address));
     }
+    if (!url.isValid() || url.scheme() != QLatin1String("https") || url.host().isEmpty()) {
+        return {};
+    }
+    if (url.port() < 0 && m_entry.port >= 1 && m_entry.port <= 65535) {
+        url.setPort(m_entry.port);
+    }
     return url;
 }
 
@@ -115,8 +121,8 @@ void DohResolver::queryWithRetry(
         callback(0, false);
         return;
     }
-    if (!url.isValid()) {
-        m_lastError = QStringLiteral("invalid DoH endpoint: %1").arg(m_entry.address);
+    if (!url.isValid() || url.isEmpty()) {
+        m_lastError = QStringLiteral("invalid DoH endpoint (HTTPS is required): %1").arg(m_entry.address);
         callback(0, false);
         return;
     }

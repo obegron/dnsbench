@@ -24,6 +24,7 @@ public:
     QString lastErrorString() const override;
     bool lastAuthenticatedDataBit() const override;
     void cancel() override;
+    QUrl endpoint() const;
 
 private:
     ResolverEntry m_entry;
@@ -33,6 +34,5 @@ private:
     QNetworkAccessManager m_network;
     QPointer<QNetworkReply> m_reply;
 
-    QUrl endpoint() const;
     void queryWithRetry(const QString& domain, QueryCallback callback, bool retryHttp2ProtocolError, std::shared_ptr<QElapsedTimer> elapsed);
 };

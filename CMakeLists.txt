@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(DnsBenchmark
-    VERSION 0.1.4
+    VERSION 0.1.5
     LANGUAGES CXX
 )
 
@@ -22,7 +22,9 @@ qt_standard_project_setup()
 set(DNSBENCH_CORE_SOURCES
     src/model/ResolverModel.cpp
     src/benchmark/DnsPacket.cpp
+    src/benchmark/PassAggregation.cpp
     src/benchmark/Statistics.cpp
+    src/export/ResultExporter.cpp
 )
 
 add_library(dnsbench_core STATIC ${DNSBENCH_CORE_SOURCES})
@@ -54,7 +56,6 @@ set(DNSBENCH_APP_SOURCES
     src/benchmark/DotResolver.cpp
     src/benchmark/UdpResolver.cpp
     src/detection/SystemDnsDetector.cpp
-    src/export/ResultExporter.cpp
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -71,6 +72,7 @@ endif()
 
 qt_add_executable(dnsbench ${DNSBENCH_APP_SOURCES})
 target_include_directories(dnsbench PRIVATE src)
+target_compile_definitions(dnsbench PRIVATE DNSBENCH_VERSION="${PROJECT_VERSION}")
 target_link_libraries(dnsbench
     PRIVATE
         dnsbench_core
@@ -122,6 +124,14 @@ qt_add_executable(test_dns_packet tests/test_dns_packet.cpp)
 target_link_libraries(test_dns_packet PRIVATE dnsbench_core Qt6::Test)
 add_test(NAME test_dns_packet COMMAND test_dns_packet)
 
+qt_add_executable(test_pass_aggregation tests/test_pass_aggregation.cpp)
+target_link_libraries(test_pass_aggregation PRIVATE dnsbench_core Qt6::Test)
+add_test(NAME test_pass_aggregation COMMAND test_pass_aggregation)
+
+qt_add_executable(test_result_exporter tests/test_result_exporter.cpp)
+target_link_libraries(test_result_exporter PRIVATE dnsbench_core Qt6::Test)
+add_test(NAME test_result_exporter COMMAND test_result_exporter)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     qt_add_executable(test_dns_detection
         tests/test_dns_detection.cpp
@@ -142,3 +152,16 @@ qt_add_executable(test_udp_benchmark
 target_include_directories(test_udp_benchmark PRIVATE src)
 target_link_libraries(test_udp_benchmark PRIVATE dnsbench_core Qt6::Test)
 add_test(NAME test_udp_benchmark COMMAND test_udp_benchmark)
+
+qt_add_executable(test_doh_resolver
+    tests/test_doh_resolver.cpp
+    src/benchmark/DohResolver.cpp
+)
+target_include_directories(test_doh_resolver PRIVATE src)
+target_link_libraries(test_doh_resolver PRIVATE dnsbench_core Qt6::Test)
+add_test(NAME test_doh_resolver COMMAND test_doh_resolver)
+
+qt_add_executable(test_headless_cli tests/test_headless_cli.cpp)
+target_link_libraries(test_headless_cli PRIVATE Qt6::Core Qt6::Test)
+add_dependencies(test_headless_cli dnsbench)
+add_test(NAME test_headless_cli COMMAND test_headless_cli)

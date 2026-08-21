@@ -72,6 +72,8 @@ private:
     QHash<QString, QVector<QVector<ResolverSamplePoint>>> m_repeatPassSamples;
     QHash<QString, QVector<Statistics>> m_repeatUncachedPassStats;
     QHash<QString, QVector<QVector<ResolverSamplePoint>>> m_repeatUncachedPassSamples;
+    QHash<QString, QVector<ResolverStatus>> m_repeatPassStatuses;
+    QHash<QString, bool> m_repeatDnssecSeen;
     int m_requestedPasses = 1;
     int m_currentPass = 0;
     bool m_preparedForExit = false;

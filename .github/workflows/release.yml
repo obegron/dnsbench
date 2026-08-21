@@ -112,14 +112,13 @@ jobs:
             .
 
       - name: Package
-        run: |
-          chmod +x "dist/linux-${{ matrix.arch }}/dnsbench"
+        run: chmod +x "dist/linux-${{ matrix.arch }}/dnsbench/dnsbench"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: dnsbench-linux-${{ matrix.arch }}
-          path: dist/linux-${{ matrix.arch }}/dnsbench
+          path: dist/linux-${{ matrix.arch }}/dnsbench/
 
   windows:
     name: Windows amd64
@@ -148,7 +147,7 @@ jobs:
           path: dist/windows/
 
   publish:
-    name: Publish GitHub release
+    name: Publish DNSBench release
     needs: [macos-slice, linux, windows]
     runs-on: ubuntu-24.04
     if: startsWith(github.ref, 'refs/tags/')
@@ -169,9 +168,8 @@ jobs:
 
           # Linux
           for arch in amd64 arm64; do
-            if [ -f "dist/artifacts/dnsbench-linux-$arch/dnsbench" ]; then
-              chmod +x "dist/artifacts/dnsbench-linux-$arch/dnsbench"
-              zip -j "dist/release/dnsbench-linux-$arch.zip" "dist/artifacts/dnsbench-linux-$arch/dnsbench"
+            if [ -d "dist/artifacts/dnsbench-linux-$arch" ]; then
+              (cd "dist/artifacts/dnsbench-linux-$arch" && zip -r "$GITHUB_WORKSPACE/dist/release/dnsbench-linux-$arch.zip" .)
             fi
           done
 
@@ -193,14 +191,14 @@ jobs:
           # macOS (already zipped in the job to preserve metadata/permissions)
           find dist/artifacts -name 'dnsbench-macos-*.zip' -exec cp {} dist/release/ \;
 
-      - name: Create release
+      - name: Publish DNSBench ${{ github.ref_name }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
         run: |
           gh release create "$TAG_NAME" \
             dist/release/* \
-            --title "$TAG_NAME" \
-            --notes "Unsigned DNSBench release artifacts."
-
-
+            --verify-tag \
+            --title "DNSBench $TAG_NAME" \
+            --generate-notes \
+            --notes "Prebuilt DNSBench packages for Linux, macOS, and Windows are attached below. See the README for platform-specific installation notes."

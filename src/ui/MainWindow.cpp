@@ -1,5 +1,6 @@
 #include "ui/MainWindow.h"
 
+#include "benchmark/PassAggregation.h"
 #include "detection/SystemDnsDetector.h"
 #include "export/ResultExporter.h"
 #include "ui/AddResolverDialog.h"
@@ -31,6 +32,7 @@
 #include <QMenuBar>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPaintEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPlainTextEdit>
@@ -91,6 +93,39 @@ struct BrowserHistorySource {
     QString label() const
     {
         return QStringLiteral("%1 - %2").arg(browserName, profileName);
+    }
+};
+
+class ToolbarMenuButton final : public QToolButton {
+public:
+    explicit ToolbarMenuButton(QWidget* parent = nullptr)
+        : QToolButton(parent)
+    {
+        setProperty("toolbarMenu", true);
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override
+    {
+        QToolButton::paintEvent(event);
+
+        const QPalette::ColorGroup group = isEnabled() ? QPalette::Active : QPalette::Disabled;
+        const QPalette::ColorRole role = isDown() ? QPalette::HighlightedText : QPalette::WindowText;
+        QColor color = palette().color(group, role);
+        color.setAlphaF(isEnabled() ? 0.85 : 0.45);
+
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        QPen pen(color, 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+        painter.setPen(pen);
+
+        const qreal centerX = width() - 9.0;
+        const qreal centerY = height() / 2.0;
+        QPainterPath chevron;
+        chevron.moveTo(centerX - 3.0, centerY - 1.5);
+        chevron.lineTo(centerX, centerY + 1.5);
+        chevron.lineTo(centerX + 3.0, centerY - 1.5);
+        painter.drawPath(chevron);
     }
 };
 
@@ -657,13 +692,10 @@ QString resolverPortDetailsLine(const ResolverEntry& entry)
     }
 
     const bool explicitPort = url.port() > 0;
-    const int defaultPort = url.scheme() == QLatin1String("http") ? 80 : 443;
-    const int effectivePort = url.port(defaultPort);
+    const int effectivePort = explicitPort ? url.port() : entry.port;
     return explicitPort
         ? QStringLiteral("Endpoint port: %1 (from URL)").arg(effectivePort)
-        : QStringLiteral("Endpoint port: %1 (%2 default)")
-              .arg(effectivePort)
-              .arg(url.scheme() == QLatin1String("http") ? QStringLiteral("HTTP") : QStringLiteral("HTTPS"));
+        : QStringLiteral("Endpoint port: %1").arg(effectivePort);
 }
 
 QList<ResolverEntry> builtInResolvers()
@@ -880,9 +912,9 @@ bool normalizeImportedResolver(ResolverEntry* entry, QString* reason)
         QUrl url(entry->address.contains(QStringLiteral("://"))
                 ? entry->address
                 : QStringLiteral("https://%1/dns-query").arg(entry->address));
-        if (!url.isValid() || url.host().isEmpty()) {
+        if (!url.isValid() || url.scheme() != QLatin1String("https") || url.host().isEmpty()) {
             if (reason) {
-                *reason = QStringLiteral("invalid DoH URL or host");
+                *reason = QStringLiteral("invalid DoH URL or host (HTTPS is required)");
             }
             return false;
         }
@@ -1276,46 +1308,9 @@ bool resultLessThan(const ResolverEntry& left, const ResolverEntry& right)
     return left.stats.meanMs < right.stats.meanMs;
 }
 
-QVector<ResolverSamplePoint> combinePassSamples(const QVector<QVector<ResolverSamplePoint>>& passSamples)
-{
-    QVector<ResolverSamplePoint> combined;
-    int offset = 0;
-    for (int pass = 0; pass < passSamples.size(); ++pass) {
-        const QVector<ResolverSamplePoint>& samples = passSamples.at(pass);
-        combined.reserve(combined.size() + samples.size());
-        for (ResolverSamplePoint sample : samples) {
-            sample.passIndex = pass;
-            sample.sampleIndex = offset + sample.sampleIndex;
-            combined.push_back(sample);
-        }
-        offset += samples.size();
-    }
-    return combined;
-}
-
-Statistics aggregateStatsForPasses(const QVector<QVector<ResolverSamplePoint>>& passSamples, const QVector<Statistics>& passStats)
-{
-    QVector<qint64> rtts;
-    int expectedTotal = 0;
-    for (const Statistics& stats : passStats) {
-        expectedTotal += stats.totalCount;
-    }
-    for (const QVector<ResolverSamplePoint>& samples : passSamples) {
-        if (expectedTotal == 0) {
-            expectedTotal += samples.size();
-        }
-        for (const ResolverSamplePoint& sample : samples) {
-            if (sample.success) {
-                rtts.push_back(sample.rttMs);
-            }
-        }
-    }
-    return Statistics::fromSamples(rtts, expectedTotal);
-}
-
 QToolButton* addMenuButton(QToolBar* toolbar, const QString& text, QMenu* menu)
 {
-    auto* button = new QToolButton(toolbar);
+    auto* button = new ToolbarMenuButton(toolbar);
     button->setText(text);
     button->setPopupMode(QToolButton::InstantPopup);
     button->setToolButtonStyle(Qt::ToolButtonTextOnly);
@@ -1380,6 +1375,14 @@ void MainWindow::applyToolbarTheme()
                 border: 1px solid transparent;
                 border-radius: 3px;
                 padding: 4px 6px;
+            }
+            QToolBar#benchmarkToolbar QToolButton[toolbarMenu="true"] {
+                padding-right: 18px;
+            }
+            QToolBar#benchmarkToolbar QToolButton[toolbarMenu="true"]::menu-indicator {
+                image: none;
+                width: 0;
+                height: 0;
             }
             QToolBar#benchmarkToolbar QToolButton:hover {
                 background: palette(alternate-base);
@@ -1683,21 +1686,19 @@ void MainWindow::applyRepeatedPassAggregates()
         }
 
         const Statistics aggregateStats = aggregateStatsForPasses(passSamples, passStats);
-        const QVector<ResolverSamplePoint> combinedSamples = combinePassSamples(passSamples);
-        bool dnssecAuthenticatedDataSeen = false;
-        if (const ResolverEntry* currentEntry = m_model.find(entry.id)) {
-            dnssecAuthenticatedDataSeen = currentEntry->dnssecAuthenticatedDataSeen;
-        }
+        const QVector<ResolverSamplePoint> combinedSamples = combinePassSamples(passSamples, passStats);
+        const QVector<Statistics> uncachedPassStats = m_repeatUncachedPassStats.value(entry.id);
+        const QVector<QVector<ResolverSamplePoint>> uncachedPassSamples = m_repeatUncachedPassSamples.value(entry.id);
         m_model.updateStats(
             entry.id,
             aggregateStats,
-            ResolverStatus::Finished,
-            dnssecAuthenticatedDataSeen,
+            aggregateStatusForPasses(m_repeatPassStatuses.value(entry.id)),
+            m_repeatDnssecSeen.value(entry.id, false),
             combinedSamples,
             passSamples,
-            aggregateStatsForPasses(m_repeatUncachedPassSamples.value(entry.id), m_repeatUncachedPassStats.value(entry.id)),
-            combinePassSamples(m_repeatUncachedPassSamples.value(entry.id)),
-            m_repeatUncachedPassSamples.value(entry.id));
+            aggregateStatsForPasses(uncachedPassSamples, uncachedPassStats),
+            combinePassSamples(uncachedPassSamples, uncachedPassStats),
+            uncachedPassSamples);
     }
 }
 
@@ -1717,7 +1718,6 @@ void MainWindow::startBenchmarkPass(bool resetRuntimeState)
         : QString();
     appendLogLine(QStringLiteral("Starting benchmark%1.").arg(passText));
     m_controller.setVerboseLogging(m_verboseLogToggle->isChecked());
-    m_controller.setMaxConcurrentResolvers(BenchmarkController::recommendedMaxConcurrentResolvers());
     const bool primeCache = m_requestedPasses <= 1 || m_currentPass <= 1;
     m_controller.start(m_repeatRunEntries, m_sampleSpin->value(), m_delaySpin->value(), loadDomains(), primeCache, m_uncachedToggle->isChecked());
     updateRunAction();
@@ -1732,6 +1732,8 @@ void MainWindow::beginBenchmarkRun(const QList<ResolverEntry>& runEntries, const
     m_repeatPassSamples.clear();
     m_repeatUncachedPassStats.clear();
     m_repeatUncachedPassSamples.clear();
+    m_repeatPassStatuses.clear();
+    m_repeatDnssecSeen.clear();
     m_repeatRunEntries = runEntries;
     m_requestedPasses = m_passSpin->value();
     m_currentPass = 1;
@@ -2386,20 +2388,32 @@ void MainWindow::showResolverDetailsForIndex(const QModelIndex& proxyIndex)
 void MainWindow::queueResolverFinished(const QString& resolverId, const Statistics& stats, ResolverStatus status, bool dnssecAuthenticatedDataSeen, const QVector<ResolverSamplePoint>& samples, const Statistics& uncachedStats, const QVector<ResolverSamplePoint>& uncachedSamples)
 {
     m_pendingResolverUpdates.insert(resolverId, PendingResolverUpdate{stats, status, dnssecAuthenticatedDataSeen, samples, uncachedStats, uncachedSamples});
-    if (m_requestedPasses > 1 && status == ResolverStatus::Finished) {
+    const bool terminalStatus = status == ResolverStatus::Finished
+        || status == ResolverStatus::Sidelined
+        || status == ResolverStatus::Failed;
+    if (m_requestedPasses > 1 && terminalStatus) {
+        const int passIndex = std::max(0, m_currentPass - 1);
+        auto setPassValue = [passIndex](auto* values, const auto& value) {
+            if (values->size() <= passIndex) {
+                values->resize(passIndex + 1);
+            }
+            (*values)[passIndex] = value;
+        };
         QVector<ResolverSamplePoint> passSamples = samples;
         for (ResolverSamplePoint& sample : passSamples) {
-            sample.passIndex = std::max(0, m_currentPass - 1);
+            sample.passIndex = passIndex;
         }
-        m_repeatPassSamples[resolverId].push_back(passSamples);
-        m_repeatPassStats[resolverId].push_back(stats);
+        setPassValue(&m_repeatPassSamples[resolverId], passSamples);
+        setPassValue(&m_repeatPassStats[resolverId], stats);
+        setPassValue(&m_repeatPassStatuses[resolverId], status);
+        m_repeatDnssecSeen[resolverId] = m_repeatDnssecSeen.value(resolverId, false) || dnssecAuthenticatedDataSeen;
         if (uncachedStats.totalCount > 0 || !uncachedSamples.isEmpty()) {
             QVector<ResolverSamplePoint> passUncachedSamples = uncachedSamples;
             for (ResolverSamplePoint& sample : passUncachedSamples) {
-                sample.passIndex = std::max(0, m_currentPass - 1);
+                sample.passIndex = passIndex;
             }
-            m_repeatUncachedPassSamples[resolverId].push_back(passUncachedSamples);
-            m_repeatUncachedPassStats[resolverId].push_back(uncachedStats);
+            setPassValue(&m_repeatUncachedPassSamples[resolverId], passUncachedSamples);
+            setPassValue(&m_repeatUncachedPassStats[resolverId], uncachedStats);
         }
     }
     if (!m_modelFlushTimer->isActive()) {
