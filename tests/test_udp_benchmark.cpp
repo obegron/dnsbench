@@ -167,8 +167,8 @@ private slots:
         QEventLoop loop;
         bool called = false;
         bool success = false;
-        qint64 rttMs = -1;
-        resolver.query(QStringLiteral("example.com"), [&](qint64 measuredRttMs, bool measuredSuccess) {
+        double rttMs = -1.0;
+        resolver.query(QStringLiteral("example.com"), [&](double measuredRttMs, bool measuredSuccess) {
             called = true;
             success = measuredSuccess;
             rttMs = measuredRttMs;

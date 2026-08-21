@@ -42,7 +42,7 @@ UdpResolver::UdpResolver(const ResolverEntry& entry, int timeoutMs, QObject* par
                 return;
             }
             m_lastAuthenticatedDataBit = DnsPacket::authenticatedDataBit(datagram);
-            finish(m_elapsed.elapsed(), true);
+            finish(m_elapsed.nsecsElapsed() / 1'000'000.0, true);
             return;
         }
     });
@@ -139,7 +139,7 @@ bool UdpResolver::ensureBound()
     return true;
 }
 
-void UdpResolver::finish(qint64 rttMs, bool success)
+void UdpResolver::finish(double rttMs, bool success)
 {
     if (!m_queryInFlight) {
         return;

@@ -579,7 +579,7 @@ public:
         for (const ResolverSamplePoint& sample : samples) {
             if (sample.success) {
                 ++successCount;
-                maxRtt = std::max(maxRtt, static_cast<qreal>(std::max<qint64>(1, sample.rttMs)));
+                maxRtt = std::max(maxRtt, static_cast<qreal>(std::max(1.0, sample.rttMs)));
             }
         }
 
@@ -2280,14 +2280,14 @@ void MainWindow::showResolverDetailsForIndex(const QModelIndex& proxyIndex)
 
     int failures = 0;
     int outliers = 0;
-    qint64 outlierThreshold = 0;
+    double outlierThreshold = 0.0;
     if (entry.stats.hasSamples()) {
-        outlierThreshold = static_cast<qint64>(std::max(entry.stats.p90Ms * 2.0, entry.stats.medianMs + 20.0));
+        outlierThreshold = std::max(entry.stats.p90Ms * 2.0, entry.stats.medianMs + 20.0);
     }
 
     stream << "Samples\n";
     if (outlierThreshold > 0) {
-        stream << "  Outlier threshold: >= " << outlierThreshold << " ms\n";
+        stream << "  Outlier threshold: >= " << QString::number(outlierThreshold, 'f', 1) << " ms\n";
     }
 
     QHash<QString, int> failureCounts;
@@ -2366,7 +2366,7 @@ void MainWindow::showResolverDetailsForIndex(const QModelIndex& proxyIndex)
                         stream << " - " << sample.errorString;
                     }
                 } else {
-                    stream << sample.rttMs << " ms outlier";
+                    stream << QString::number(sample.rttMs, 'f', 1) << " ms outlier";
                 }
                 stream << '\n';
             }

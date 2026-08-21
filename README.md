@@ -9,7 +9,7 @@ Qt6 desktop tool for benchmarking DNS resolvers across UDP IPv4/IPv6, DNS-over-H
 - Resolver table with protocol filters, pinned resolvers, progress, ETA, logs, and result summaries.
 - Built-in public resolver candidates from Cloudflare, Google, Quad9, OpenDNS, AdGuard, and Control D.
 - System DNS detection on Linux, macOS, and Windows.
-- UDP, DoH, and DoT resolver backends.
+- UDP and DoT backends plus DoH over persistent libcurl HTTP/2 connections for comparable cross-protocol timings.
 - Encrypted resolver connection warm-up and resolver sidelining before full benchmark runs.
 - Cached and uncached measurements in the same run. Uncached queries use unique random labels under the configured site list, and completed `NXDOMAIN` replies count as valid DNS responses.
 - Statistics: median, p90, mean, population stddev, min, max, and loss percent.
@@ -25,7 +25,8 @@ Requirements:
 
 - CMake 3.24+
 - C++20 compiler
-- Qt6 Core, Network, Gui, Widgets, Charts, Sql, Test
+- Qt6 Core, Network, Concurrent, Gui, Widgets, Charts, Sql, Test
+- libcurl 7.68+
 - OpenSSL
 
 ```sh
@@ -51,7 +52,7 @@ Use `--headless` for terminal output and automation. Resolver specifications use
   --samples 25 --delay 50 --domain-limit 20
 ```
 
-Add `--uncached` to measure unique random names after the cached pass, `--csv` for machine-readable output, or `--system-dns` to include detected system resolvers. Queries are intentionally scheduled one at a time across resolvers to avoid benchmark traffic affecting competing measurements.
+Add `--uncached` to measure unique random names after the cached pass, `--csv` for machine-readable output, or `--system-dns` to include detected system resolvers. `--verbose` prints sub-millisecond per-query timings and the negotiated HTTP version for DoH queries. Queries are intentionally scheduled one at a time across resolvers to avoid benchmark traffic affecting competing measurements.
 
 Exit statuses are `0` when at least one resolver produced a measured result, `1` when the benchmark completed without any measured result, and `2` for invalid command-line input.
 
@@ -130,10 +131,10 @@ JSON can be either an array or an object with a `resolvers` array:
 
 ### Linux
 
-Ubuntu packages needed for a local build include Qt Charts, Qt SQL SQLite support, OpenSSL, Ninja, and CMake:
+Ubuntu packages needed for a local build include Qt Charts, Qt SQL SQLite support, OpenSSL, libcurl, Ninja, and CMake:
 
 ```sh
-sudo apt install build-essential cmake ninja-build qt6-base-dev qt6-base-dev-tools qt6-tools-dev qt6-tools-dev-tools libqt6charts6-dev libqt6sql6-sqlite libssl-dev nlohmann-json3-dev
+sudo apt install build-essential cmake ninja-build qt6-base-dev qt6-base-dev-tools qt6-tools-dev qt6-tools-dev-tools libqt6charts6-dev libqt6sql6-sqlite libssl-dev libcurl4-openssl-dev nlohmann-json3-dev
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
@@ -147,7 +148,7 @@ docker buildx bake linux
 
 ### Windows
 
-Windows builds require Windows-targeted Qt6 and OpenSSL packages that match the compiler/toolchain used for CMake. The Linux Qt packages installed on a build host are not enough for cross-compiling.
+Windows builds require Windows-targeted Qt6, OpenSSL, and libcurl packages that match the compiler/toolchain used for CMake. The Linux packages installed on a build host are not enough for cross-compiling.
 
 Example with MinGW and an existing Windows dependency prefix:
 
@@ -160,7 +161,7 @@ cmake -S . -B build-windows -G Ninja \
 cmake --build build-windows
 ```
 
-`/path/to/windows-prefix` must contain Windows-targeted Qt6 Charts, Qt6 Sql, and OpenSSL CMake package files for the same MinGW triplet. `QT_HOST_PATH` should point at a native Qt6 install when the target Qt package needs host tools such as `moc` and `rcc`.
+`/path/to/windows-prefix` must contain Windows-targeted Qt6 Charts, Qt6 Sql, OpenSSL, and libcurl CMake package files for the same MinGW triplet. `QT_HOST_PATH` should point at a native Qt6 install when the target Qt package needs host tools such as `moc` and `rcc`.
 
 Container cross-build:
 
@@ -170,7 +171,7 @@ docker buildx bake windows
 
 ### macOS
 
-Build macOS on a Mac with Xcode command line tools and Homebrew-provided Qt and OpenSSL. Cross-compiling a usable macOS app bundle from Linux is not supported because it needs Apple's SDK, frameworks, and deployment tooling.
+Build macOS on a Mac with Xcode command line tools, the system libcurl, and Homebrew-provided Qt and OpenSSL. Cross-compiling a usable macOS app bundle from Linux is not supported because it needs Apple's SDK, frameworks, and deployment tooling.
 
 ```sh
 xcode-select --install

@@ -13,7 +13,8 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Network Gui Widgets Charts Sql Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Network Concurrent Gui Widgets Charts Sql Test)
+find_package(CURL 7.68 REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(nlohmann_json CONFIG QUIET)
 
@@ -78,9 +79,11 @@ target_link_libraries(dnsbench
         dnsbench_core
         Qt6::Core
         Qt6::Network
+        Qt6::Concurrent
         Qt6::Widgets
         Qt6::Charts
         Qt6::Sql
+        CURL::libcurl
         OpenSSL::SSL
         OpenSSL::Crypto
 )
@@ -150,7 +153,7 @@ qt_add_executable(test_udp_benchmark
     src/benchmark/DotResolver.cpp
 )
 target_include_directories(test_udp_benchmark PRIVATE src)
-target_link_libraries(test_udp_benchmark PRIVATE dnsbench_core Qt6::Test)
+target_link_libraries(test_udp_benchmark PRIVATE dnsbench_core Qt6::Concurrent Qt6::Test CURL::libcurl)
 add_test(NAME test_udp_benchmark COMMAND test_udp_benchmark)
 
 qt_add_executable(test_doh_resolver
@@ -158,7 +161,7 @@ qt_add_executable(test_doh_resolver
     src/benchmark/DohResolver.cpp
 )
 target_include_directories(test_doh_resolver PRIVATE src)
-target_link_libraries(test_doh_resolver PRIVATE dnsbench_core Qt6::Test)
+target_link_libraries(test_doh_resolver PRIVATE dnsbench_core Qt6::Concurrent Qt6::Test CURL::libcurl)
 add_test(NAME test_doh_resolver COMMAND test_doh_resolver)
 
 qt_add_executable(test_headless_cli tests/test_headless_cli.cpp)

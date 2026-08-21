@@ -5,7 +5,7 @@
 
 namespace {
 
-double percentileNearestRank(const QVector<qint64>& sorted, double percentile)
+double percentileNearestRank(const QVector<double>& sorted, double percentile)
 {
     if (sorted.isEmpty()) {
         return 0.0;
@@ -17,7 +17,7 @@ double percentileNearestRank(const QVector<qint64>& sorted, double percentile)
 
 }
 
-Statistics Statistics::fromSamples(const QVector<qint64>& rttSamplesMs, int expectedTotal)
+Statistics Statistics::fromSamples(const QVector<double>& rttSamplesMs, int expectedTotal)
 {
     Statistics result;
     result.totalCount = std::max(expectedTotal, static_cast<int>(rttSamplesMs.size()));
@@ -32,7 +32,7 @@ Statistics Statistics::fromSamples(const QVector<qint64>& rttSamplesMs, int expe
         return result;
     }
 
-    QVector<qint64> sorted = rttSamplesMs;
+    QVector<double> sorted = rttSamplesMs;
     std::sort(sorted.begin(), sorted.end());
 
     const int n = sorted.size();
@@ -46,15 +46,15 @@ Statistics Statistics::fromSamples(const QVector<qint64>& rttSamplesMs, int expe
     double sum = 0.0;
     result.minMs = static_cast<double>(sorted.front());
     result.maxMs = static_cast<double>(sorted.back());
-    for (qint64 value : sorted) {
-        sum += static_cast<double>(value);
+    for (double value : sorted) {
+        sum += value;
     }
 
     result.meanMs = sum / n;
 
     double varianceSum = 0.0;
-    for (qint64 value : sorted) {
-        const double diff = static_cast<double>(value) - result.meanMs;
+    for (double value : sorted) {
+        const double diff = value - result.meanMs;
         varianceSum += diff * diff;
     }
     result.stddevMs = std::sqrt(varianceSum / n);

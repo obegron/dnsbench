@@ -18,7 +18,7 @@ public:
 
     bool hasSamples() const { return successCount > 0; }
 
-    static Statistics fromSamples(const QVector<qint64>& rttSamplesMs, int expectedTotal);
+    static Statistics fromSamples(const QVector<double>& rttSamplesMs, int expectedTotal);
 };
 
 Q_DECLARE_METATYPE(Statistics)

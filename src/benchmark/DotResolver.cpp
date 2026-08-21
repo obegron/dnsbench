@@ -57,7 +57,7 @@ DotResolver::DotResolver(const ResolverEntry& entry, int timeoutMs, QObject* par
         if (!valid && m_lastError.isEmpty()) {
             m_lastError = QStringLiteral("invalid DNS response for %1").arg(m_expectedDomain);
         }
-        finish(valid ? m_elapsed.elapsed() : 0, valid);
+        finish(valid ? m_elapsed.nsecsElapsed() / 1'000'000.0 : 0.0, valid);
     });
 }
 
@@ -178,7 +178,7 @@ bool DotResolver::retryCurrentQueryAfterClosedConnection()
     return true;
 }
 
-void DotResolver::finish(qint64 rttMs, bool success)
+void DotResolver::finish(double rttMs, bool success)
 {
     if (!m_queryInFlight) {
         return;

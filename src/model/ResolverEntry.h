@@ -25,7 +25,7 @@ enum class ResolverStatus {
 
 struct ResolverSamplePoint {
     int sampleIndex = 0;
-    qint64 rttMs = 0;
+    double rttMs = 0.0;
     bool success = false;
     QString errorString;
     int passIndex = 0;

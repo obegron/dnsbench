@@ -37,6 +37,16 @@ private slots:
         QCOMPARE(stats.lossPercent, 100.0);
         QVERIFY(!stats.hasSamples());
     }
+
+    void preservesSubMillisecondPrecision()
+    {
+        const Statistics stats = Statistics::fromSamples({0.25, 0.75, 1.25}, 3);
+        QCOMPARE(stats.medianMs, 0.75);
+        QCOMPARE(stats.p90Ms, 1.25);
+        QCOMPARE(stats.meanMs, 0.75);
+        QCOMPARE(stats.minMs, 0.25);
+        QCOMPARE(stats.maxMs, 1.25);
+    }
 };
 
 QTEST_GUILESS_MAIN(StatisticsTest)

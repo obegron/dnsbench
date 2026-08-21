@@ -83,7 +83,7 @@ QChart* createTimelineChart(const ResolverEntry& entry, bool large, bool overlay
             const qreal x = sampleIndex;
             maxSample = std::max(maxSample, sampleIndex);
             if (sample.success) {
-                const qreal y = std::max<qint64>(1, sample.rttMs);
+                const qreal y = std::max(1.0, sample.rttMs);
                 series->append(x, y);
                 maxRtt = std::max(maxRtt, y);
             } else {

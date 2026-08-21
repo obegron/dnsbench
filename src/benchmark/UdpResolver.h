@@ -35,5 +35,5 @@ private:
     bool m_lastAuthenticatedDataBit = false;
 
     bool ensureBound();
-    void finish(qint64 rttMs, bool success);
+    void finish(double rttMs, bool success);
 };

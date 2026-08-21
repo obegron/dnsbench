@@ -1,6 +1,9 @@
 #include "benchmark/DohResolver.h"
 
+#include <QHostAddress>
+#include <QTcpServer>
 #include <QTest>
+#include <QTimer>
 
 namespace {
 
@@ -45,13 +48,34 @@ private slots:
 
         bool called = false;
         bool success = true;
-        resolver.query(QStringLiteral("example.com"), [&](qint64, bool querySuccess) {
+        resolver.query(QStringLiteral("example.com"), [&](double, bool querySuccess) {
             called = true;
             success = querySuccess;
         });
         QVERIFY(called);
         QVERIFY(!success);
         QVERIFY(resolver.lastErrorString().contains(QStringLiteral("HTTPS")));
+    }
+
+    void cancellationAbortsActiveRequest()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost));
+
+        DohResolver resolver(dohEntry(
+            QStringLiteral("https://127.0.0.1:%1/dns-query").arg(server.serverPort()),
+            server.serverPort()));
+        bool called = false;
+        bool success = true;
+        resolver.query(QStringLiteral("example.com"), [&](double, bool querySuccess) {
+            called = true;
+            success = querySuccess;
+        });
+        QTimer::singleShot(20, &resolver, &DohResolver::cancel);
+
+        QTRY_VERIFY_WITH_TIMEOUT(called, 2000);
+        QVERIFY(!success);
+        QCOMPARE(resolver.lastErrorString(), QStringLiteral("cancelled"));
     }
 };
 

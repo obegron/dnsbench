@@ -146,9 +146,9 @@ private:
         ResolverEntry entry;
         std::unique_ptr<BaseResolver> resolver;
         int domainOffset = 0;
-        QVector<qint64> rtts;
+        QVector<double> rtts;
         QVector<ResolverSamplePoint> samplePoints;
-        QVector<qint64> uncachedRtts;
+        QVector<double> uncachedRtts;
         QVector<ResolverSamplePoint> uncachedSamplePoints;
         bool dnssecAuthenticatedDataSeen = false;
         bool stoppedForNoResponse = false;
@@ -189,7 +189,7 @@ private:
             int successes = 0;
             QString firstWarmupError;
             for (int i = 0; i < warmupCount && !isCancelled(); ++i) {
-                qint64 rttMs = 0;
+                double rttMs = 0.0;
                 QString error;
                 if (queryBlocking(state.resolver.get(), domainForSample(state, i), &rttMs, &error)) {
                     ++successes;
@@ -240,7 +240,7 @@ private:
                 if (state.sidelined) {
                     continue;
                 }
-                qint64 ignoredRttMs = 0;
+                double ignoredRttMs = 0.0;
                 QString error;
                 const bool success = queryBlocking(state.resolver.get(), domainForSample(state, sample), &ignoredRttMs, &error);
                 if (success) {
@@ -279,16 +279,18 @@ private:
                 const QString domain = domainForSample(state, sample);
                 postVerboseLog(QStringLiteral("Query %1 via %2.").arg(domain, state.entry.effectiveName()));
 
-                qint64 rttMs = 0;
+                double rttMs = 0.0;
                 QString error;
                 const bool success = queryBlocking(state.resolver.get(), domain, &rttMs, &error);
                 if (success) {
                     state.rtts.push_back(rttMs);
                     state.samplePoints.push_back({sample, rttMs, true, {}});
                     state.dnssecAuthenticatedDataSeen = state.dnssecAuthenticatedDataSeen || state.resolver->lastAuthenticatedDataBit();
-                    postVerboseLog(QStringLiteral("Response %1 via %2 in %3 ms.")
+                    const QString transport = state.resolver->lastQueryTransport();
+                    postVerboseLog(QStringLiteral("Response %1 via %2 in %3 ms%4.")
                         .arg(domain, state.entry.effectiveName())
-                        .arg(rttMs));
+                        .arg(rttMs, 0, 'f', 3)
+                        .arg(transport.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(transport)));
                 } else {
                     state.samplePoints.push_back({sample, 0, false, error});
                     postVerboseLog(error.isEmpty()
@@ -333,16 +335,18 @@ private:
                 const QString domain = uncachedDomainForSample(state, sample);
                 postVerboseLog(QStringLiteral("Uncached query %1 via %2.").arg(domain, state.entry.effectiveName()));
 
-                qint64 rttMs = 0;
+                double rttMs = 0.0;
                 QString error;
                 const bool success = queryBlocking(state.resolver.get(), domain, &rttMs, &error);
                 if (success) {
                     state.uncachedRtts.push_back(rttMs);
                     state.uncachedSamplePoints.push_back({sample, rttMs, true, {}, 1});
                     state.dnssecAuthenticatedDataSeen = state.dnssecAuthenticatedDataSeen || state.resolver->lastAuthenticatedDataBit();
-                    postVerboseLog(QStringLiteral("Uncached response %1 via %2 in %3 ms.")
+                    const QString transport = state.resolver->lastQueryTransport();
+                    postVerboseLog(QStringLiteral("Uncached response %1 via %2 in %3 ms%4.")
                         .arg(domain, state.entry.effectiveName())
-                        .arg(rttMs));
+                        .arg(rttMs, 0, 'f', 3)
+                        .arg(transport.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(transport)));
                 } else {
                     state.uncachedSamplePoints.push_back({sample, 0, false, error, 1});
                     postVerboseLog(error.isEmpty()
@@ -385,7 +389,7 @@ private:
         return m_sampleCount * (m_includeUncached ? 2 : 1);
     }
 
-    bool queryBlocking(BaseResolver* resolver, const QString& domain, qint64* rttMs, QString* errorString)
+    bool queryBlocking(BaseResolver* resolver, const QString& domain, double* rttMs, QString* errorString)
     {
         if (isCancelled()) {
             return false;
@@ -395,7 +399,7 @@ private:
         QTimer cancellationTimer;
         bool done = false;
         bool success = false;
-        qint64 rtt = 0;
+        double rtt = 0.0;
 
         cancellationTimer.setInterval(cancellationPollMs);
         QObject::connect(&cancellationTimer, &QTimer::timeout, &loop, [&]() {
@@ -407,7 +411,7 @@ private:
             }
         });
 
-        resolver->query(domain, [&](qint64 measuredRttMs, bool measuredSuccess) {
+        resolver->query(domain, [&](double measuredRttMs, bool measuredSuccess) {
             rtt = measuredRttMs;
             success = measuredSuccess;
             done = true;

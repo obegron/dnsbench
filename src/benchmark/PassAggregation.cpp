@@ -47,7 +47,7 @@ Statistics aggregateStatsForPasses(
     const QVector<QVector<ResolverSamplePoint>>& passSamples,
     const QVector<Statistics>& passStats)
 {
-    QVector<qint64> rtts;
+    QVector<double> rtts;
     int expectedTotal = 0;
     for (const Statistics& stats : passStats) {
         expectedTotal += stats.totalCount;

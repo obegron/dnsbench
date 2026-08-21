@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     cmake \
+    libcurl4-openssl-dev \
     libqt6charts6-dev \
     libqt6sql6-sqlite \
     libssl-dev \
@@ -47,6 +48,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     cmake \
     gcc-c++ \
     mingw64-gcc-c++ \
+    mingw64-curl \
     mingw64-openssl \
     mingw64-qt6-qtbase \
     mingw64-qt6-qtcharts \

@@ -40,5 +40,5 @@ private:
     void connectAndSendCurrentQuery();
     void sendCurrentQuery(const QByteArray& dnsPacket);
     bool retryCurrentQueryAfterClosedConnection();
-    void finish(qint64 rttMs, bool success);
+    void finish(double rttMs, bool success);
 };
